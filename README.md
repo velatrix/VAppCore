@@ -19,27 +19,7 @@ Enterprise .NET 8 library for building web APIs. Provides base entities with aud
 
 ## Quick Start
 
-### Install
-
-From local feed:
-
-```bash
-dotnet add package VAppCore
-```
-
-Make sure your `nuget.config` includes the local source:
-
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<configuration>
-  <packageSources>
-    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
-    <add key="local" value="F:\Packages\C#" />
-  </packageSources>
-</configuration>
-```
-
-### Minimal Setup
+### Setup
 
 ```csharp
 // Program.cs
