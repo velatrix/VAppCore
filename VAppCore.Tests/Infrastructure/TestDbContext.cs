@@ -79,6 +79,7 @@ public class TestDbContext : DbContext
     public DbSet<TestAuditedEntity> AuditedEntities => Set<TestAuditedEntity>();
     public DbSet<TestAuditedSoftDeletable> AuditedSoftDeletables => Set<TestAuditedSoftDeletable>();
     public DbSet<TestAuditedWithSkippedField> AuditedWithSkipped => Set<TestAuditedWithSkippedField>();
+    public DbSet<ApiKey> ApiKeys => Set<ApiKey>();
 
     public TestDbContext(DbContextOptions options) : base(options) { }
 }
@@ -96,6 +97,7 @@ public class VanillaDbContext : DbContext
     public DbSet<TestAuditedEntity> AuditedEntities => Set<TestAuditedEntity>();
     public DbSet<TestAuditedSoftDeletable> AuditedSoftDeletables => Set<TestAuditedSoftDeletable>();
     public DbSet<TestAuditedWithSkippedField> AuditedWithSkipped => Set<TestAuditedWithSkippedField>();
+    public DbSet<ApiKey> ApiKeys => Set<ApiKey>();
 
     public VanillaDbContext(DbContextOptions options) : base(options) { }
 }
