@@ -1,8 +1,10 @@
 namespace VAppCore;
 
+/// <summary>The type of change recorded in an <see cref="AuditLog"/> row.</summary>
 public enum AuditAction
 {
-    Add = 0,
-    Modify = 1,
-    Delete = 2
+    Unknown = 0,
+    Add = 1,
+    Modify = 2,
+    Delete = 3
 }
