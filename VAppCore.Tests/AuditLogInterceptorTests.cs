@@ -92,4 +92,29 @@ public class AuditLogInterceptorTests
         Assert.Equal("Doomed", name.GetProperty("old").GetString());
         Assert.Equal(JsonValueKind.Null, name.GetProperty("new").ValueKind);
     }
+
+    [Fact]
+    public async Task SoftDelete_Audited_WritesAuditRow_WithActionDelete_NotModify()
+    {
+        var (db, _) = TestFactory.CreateAuditLogDbContext();
+        var entity = new TestAuditedSoftDeletable { Id = Guid.NewGuid(), Name = "Soft" };
+        db.AuditedSoftDeletables.Add(entity);
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        db.AuditedSoftDeletables.Remove(entity);
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var rows = await db.AuditLogs
+            .Where(a => a.EntityType == nameof(TestAuditedSoftDeletable))
+            .OrderBy(a => a.ChangedAt)
+            .ToListAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(2, rows.Count);
+        Assert.Equal(AuditAction.Add, rows[0].Action);
+        Assert.Equal(AuditAction.Delete, rows[1].Action);
+
+        using var doc = JsonDocument.Parse(rows[1].Changes);
+        Assert.False(doc.RootElement.TryGetProperty("isDeleted", out _));
+        Assert.False(doc.RootElement.TryGetProperty("deletedAt", out _));
+        Assert.False(doc.RootElement.TryGetProperty("deletedBy", out _));
+    }
 }

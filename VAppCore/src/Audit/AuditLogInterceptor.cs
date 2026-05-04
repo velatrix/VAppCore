@@ -101,6 +101,20 @@ public sealed class AuditLogInterceptor<TUserKey, TTenantKey> : ISaveChangesInte
         };
         if (action is null) return null;
 
+        // Soft-delete detection: VAuditInterceptor (when registered first) has already
+        // turned an ISoftDeletable Deleted entry into Modified+IsDeleted=true. Recognize
+        // that pattern and record it as Action=Delete instead of Modify with an empty diff.
+        if (action == AuditAction.Modify && entry.Entity is ISoftDeletable)
+        {
+            var isDeletedProp = entry.Properties.FirstOrDefault(p => p.Metadata.Name == nameof(ISoftDeletable.IsDeleted));
+            if (isDeletedProp is not null
+                && isDeletedProp.OriginalValue is false
+                && isDeletedProp.CurrentValue is true)
+            {
+                action = AuditAction.Delete;
+            }
+        }
+
         var diff = BuildDiff(entry, action.Value);
         if (action == AuditAction.Modify && diff.Count == 0) return null;
 
