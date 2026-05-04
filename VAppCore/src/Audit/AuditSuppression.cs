@@ -11,6 +11,11 @@ public static class AuditSuppression
 
     public static bool IsSuppressed => _depth.Value > 0;
 
+    /// <summary>
+    /// Increments the suppression depth for the current execution context.
+    /// Dispose the returned scope (via <c>using</c>) to decrement the depth.
+    /// Supports nesting: suppression ends only when the outermost scope is disposed.
+    /// </summary>
     public static IDisposable Suppress()
     {
         _depth.Value++;

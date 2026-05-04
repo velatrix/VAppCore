@@ -42,4 +42,14 @@ public class AuditSuppressionTests
             Assert.True(AuditSuppression.IsSuppressed);
         }
     }
+
+    [Fact]
+    public async Task Suppress_DisposeClearsAfterAwait()
+    {
+        using (AuditSuppression.Suppress())
+        {
+            await Task.Yield();
+        }
+        Assert.False(AuditSuppression.IsSuppressed);
+    }
 }
