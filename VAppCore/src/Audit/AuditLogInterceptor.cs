@@ -126,6 +126,8 @@ public sealed class AuditLogInterceptor<TUserKey, TTenantKey> : ISaveChangesInte
             if (AlwaysSkip.Contains(name)) continue;
             if (skip.Contains(name)) continue;
             if (action == AuditAction.Modify && !prop.IsModified) continue;
+            if (action == AuditAction.Modify &&
+                Equals(prop.OriginalValue, prop.CurrentValue)) continue;
 
             var oldVal = action == AuditAction.Add ? null : prop.OriginalValue;
             var newVal = action == AuditAction.Delete ? null : prop.CurrentValue;
