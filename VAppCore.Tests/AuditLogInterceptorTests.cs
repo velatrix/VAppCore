@@ -157,4 +157,45 @@ public class AuditLogInterceptorTests
         Assert.False(doc.RootElement.TryGetProperty("createdBy", out _));
         Assert.False(doc.RootElement.TryGetProperty("updatedBy", out _));
     }
+
+    [Fact]
+    public async Task Modify_NotAuditedField_ExcludedFromDiff()
+    {
+        var (db, _) = TestFactory.CreateAuditLogDbContext();
+        var entity = new TestAuditedWithSkippedField { Id = Guid.NewGuid(), Name = "Old", LoginCount = 0 };
+        db.AuditedWithSkipped.Add(entity);
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        entity.Name = "New";
+        entity.LoginCount = 99;
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var modify = await db.AuditLogs
+            .Where(a => a.Action == AuditAction.Modify
+                     && a.EntityType == nameof(TestAuditedWithSkippedField))
+            .SingleAsync(TestContext.Current.CancellationToken);
+
+        using var doc = JsonDocument.Parse(modify.Changes);
+        Assert.True(doc.RootElement.TryGetProperty("name", out _));
+        Assert.False(doc.RootElement.TryGetProperty("loginCount", out _),
+            "[NotAudited] property must be excluded from the diff");
+    }
+
+    [Fact]
+    public async Task Modify_OnlyNotAuditedFieldsChanged_WritesNoAuditRow()
+    {
+        var (db, _) = TestFactory.CreateAuditLogDbContext();
+        var entity = new TestAuditedWithSkippedField { Id = Guid.NewGuid(), Name = "Same", LoginCount = 1 };
+        db.AuditedWithSkipped.Add(entity);
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        entity.LoginCount = 2;
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var modifyCount = await db.AuditLogs
+            .CountAsync(a => a.Action == AuditAction.Modify
+                          && a.EntityType == nameof(TestAuditedWithSkippedField),
+                        TestContext.Current.CancellationToken);
+        Assert.Equal(0, modifyCount);
+    }
 }
