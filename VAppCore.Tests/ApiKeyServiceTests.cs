@@ -71,4 +71,60 @@ public class ApiKeyServiceTests
 
         Assert.Equal(expiry, key.ExpiresAt);
     }
+
+    [Fact]
+    public async Task AuthenticateAsync_ValidKey_ReturnsApiKey()
+    {
+        var (_, svc) = CreateService();
+        var (created, plaintext) = await svc.CreateAsync(
+            "k", new[] { "p" }, ct: TestContext.Current.CancellationToken);
+
+        var auth = await svc.AuthenticateAsync(plaintext, TestContext.Current.CancellationToken);
+        Assert.NotNull(auth);
+        Assert.Equal(created.Id, auth.Id);
+    }
+
+    [Fact]
+    public async Task AuthenticateAsync_UnknownKey_ReturnsNull()
+    {
+        var (_, svc) = CreateService();
+        var auth = await svc.AuthenticateAsync("vk_live_unknown_key_value_string_padding_zzzz", TestContext.Current.CancellationToken);
+        Assert.Null(auth);
+    }
+
+    [Fact]
+    public async Task AuthenticateAsync_RevokedKey_ReturnsNull()
+    {
+        var (db, svc) = CreateService();
+        var (created, plaintext) = await svc.CreateAsync(
+            "k", new[] { "p" }, ct: TestContext.Current.CancellationToken);
+
+        // Manually flip IsActive (RevokeAsync isn't implemented until Task 5)
+        created.IsActive = false;
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var auth = await svc.AuthenticateAsync(plaintext, TestContext.Current.CancellationToken);
+        Assert.Null(auth);
+    }
+
+    [Fact]
+    public async Task AuthenticateAsync_ExpiredKey_ReturnsNull()
+    {
+        var (_, svc) = CreateService();
+        var (_, plaintext) = await svc.CreateAsync(
+            "k",
+            new[] { "p" },
+            expiresAt: DateTimeOffset.UtcNow.AddSeconds(-1),
+            ct: TestContext.Current.CancellationToken);
+
+        var auth = await svc.AuthenticateAsync(plaintext, TestContext.Current.CancellationToken);
+        Assert.Null(auth);
+    }
+
+    [Fact]
+    public async Task AuthenticateAsync_EmptyOrNullKey_ReturnsNull()
+    {
+        var (_, svc) = CreateService();
+        Assert.Null(await svc.AuthenticateAsync(string.Empty, TestContext.Current.CancellationToken));
+    }
 }

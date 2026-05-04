@@ -33,8 +33,21 @@ public sealed class ApiKeyService : IApiKeyService
         return (key, plaintext);
     }
 
-    public Task<ApiKey?> AuthenticateAsync(string plaintextKey, CancellationToken ct = default)
-        => throw new NotImplementedException("Wired in Task 4");
+    public async Task<ApiKey?> AuthenticateAsync(string plaintextKey, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(plaintextKey)) return null;
+
+        var hash = ApiKeyHasher.Hash(plaintextKey);
+        var key = await _db.Set<ApiKey>()
+            .AsNoTracking()
+            .FirstOrDefaultAsync(k => k.HashedSecret == hash, ct);
+
+        if (key is null) return null;
+        if (!key.IsActive) return null;
+        if (key.ExpiresAt is { } exp && exp <= DateTimeOffset.UtcNow) return null;
+
+        return key;
+    }
 
     public Task RevokeAsync(Guid keyId, CancellationToken ct = default)
         => throw new NotImplementedException("Wired in Task 5");
