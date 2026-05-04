@@ -43,6 +43,28 @@ public class TestConcurrentXminEntity : VEntity<Guid, Guid, Guid>, IConcurrentXm
     public uint Xmin { get; set; }
 }
 
+public class TestAuditedEntity : VEntity<Guid, Guid, Guid>, IAuditedEntity
+{
+    public string Name { get; set; } = string.Empty;
+    public int Score { get; set; }
+}
+
+public class TestAuditedSoftDeletable : VEntity<Guid, Guid, Guid>, IAuditedEntity, ISoftDeletable
+{
+    public string Name { get; set; } = string.Empty;
+    public bool IsDeleted { get; set; }
+    public DateTimeOffset? DeletedAt { get; set; }
+    public Guid? DeletedBy { get; set; }
+}
+
+public class TestAuditedWithSkippedField : VEntity<Guid, Guid, Guid>, IAuditedEntity
+{
+    public string Name { get; set; } = string.Empty;
+
+    [NotAudited]
+    public int LoginCount { get; set; }
+}
+
 // ── Test DbContext (plain DbContext — v2 wires VAppCore at options level) ──
 
 public class TestDbContext : DbContext
@@ -53,6 +75,10 @@ public class TestDbContext : DbContext
     public DbSet<TestNullableEntity> NullableEntities => Set<TestNullableEntity>();
     public DbSet<TestConcurrentEntity> ConcurrentEntities => Set<TestConcurrentEntity>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<TestAuditedEntity> AuditedEntities => Set<TestAuditedEntity>();
+    public DbSet<TestAuditedSoftDeletable> AuditedSoftDeletables => Set<TestAuditedSoftDeletable>();
+    public DbSet<TestAuditedWithSkippedField> AuditedWithSkipped => Set<TestAuditedWithSkippedField>();
 
     public TestDbContext(DbContextOptions options) : base(options) { }
 }
@@ -66,6 +92,10 @@ public class VanillaDbContext : DbContext
     public DbSet<TestNullableEntity> NullableEntities => Set<TestNullableEntity>();
     public DbSet<TestConcurrentEntity> ConcurrentEntities => Set<TestConcurrentEntity>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<TestAuditedEntity> AuditedEntities => Set<TestAuditedEntity>();
+    public DbSet<TestAuditedSoftDeletable> AuditedSoftDeletables => Set<TestAuditedSoftDeletable>();
+    public DbSet<TestAuditedWithSkippedField> AuditedWithSkipped => Set<TestAuditedWithSkippedField>();
 
     public VanillaDbContext(DbContextOptions options) : base(options) { }
 }
@@ -141,6 +171,9 @@ public static class TestFactory
         var db = new VanillaDbContext(options);
         return (db, user);
     }
+
+    public static (TestDbContext Db, TestCurrentUser User) CreateAuditLogDbContext(bool authenticated = true)
+        => throw new NotImplementedException("Wired in Task 5");
 
     private static IServiceProvider BuildServiceProvider(TestCurrentUser user)
     {
