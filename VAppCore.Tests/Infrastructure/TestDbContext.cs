@@ -175,7 +175,6 @@ public static class TestFactory
     public static (TestDbContext Db, TestCurrentUser User) CreateAuditLogDbContext(bool authenticated = true)
     {
         var user = new TestCurrentUser { IsAuthenticated = authenticated };
-        var sp = BuildServiceProvider(user);
 
         var auditInterceptor = new AuditLogInterceptor<Guid, Guid>(authenticated ? user : null);
         var vAuditInterceptor = new VAuditInterceptor<Guid, Guid>(authenticated ? user : null);

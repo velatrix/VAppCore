@@ -12,6 +12,8 @@ namespace VAppCore;
 /// <see cref="IAuditedEntity"/>. Skipped entirely for entities that don't implement the marker.
 /// The audit row inserts via the same DbContext, so it commits with the entity change atomically.
 /// Honors <see cref="AuditSuppression"/> for bulk operations.
+/// The consuming DbContext must expose <c>DbSet&lt;AuditLog&gt;</c>; the interceptor throws
+/// <see cref="InvalidOperationException"/> on the first save if it isn't registered.
 /// </summary>
 public sealed class AuditLogInterceptor<TUserKey, TTenantKey> : ISaveChangesInterceptor
     where TUserKey : IEquatable<TUserKey>
@@ -33,7 +35,7 @@ public sealed class AuditLogInterceptor<TUserKey, TTenantKey> : ISaveChangesInte
         nameof(IConcurrentXmin.Xmin),
         nameof(ISoftDeletable.IsDeleted),
         nameof(ISoftDeletable.DeletedAt),
-        "DeletedBy"
+        VAuditInterceptor<int, int>.DeletedByPropertyName
     ];
 
     // Cache of [NotAudited] property names per entity type
@@ -65,6 +67,10 @@ public sealed class AuditLogInterceptor<TUserKey, TTenantKey> : ISaveChangesInte
     {
         if (db is null) return;
         if (AuditSuppression.IsSuppressed) return;
+
+        if (db.Model.FindEntityType(typeof(AuditLog)) is null)
+            throw new InvalidOperationException(
+                $"{nameof(AuditLogInterceptor<TUserKey, TTenantKey>)} requires DbSet<AuditLog> to be registered on the DbContext.");
 
         var changedAt = DateTimeOffset.UtcNow;
         var changedBy = _currentUser is { IsAuthenticated: true }
@@ -123,7 +129,7 @@ public sealed class AuditLogInterceptor<TUserKey, TTenantKey> : ISaveChangesInte
 
             var oldVal = action == AuditAction.Add ? null : prop.OriginalValue;
             var newVal = action == AuditAction.Delete ? null : prop.CurrentValue;
-            diff[CamelCase(name)] = new AuditChange(oldVal, newVal);
+            diff[JsonNamingPolicy.CamelCase.ConvertName(name)] = new AuditChange(oldVal, newVal);
         }
 
         return diff;
@@ -145,8 +151,4 @@ public sealed class AuditLogInterceptor<TUserKey, TTenantKey> : ISaveChangesInte
             .Select(p => p.Name)];
     }
 
-    private static string CamelCase(string s)
-        => string.IsNullOrEmpty(s) || char.IsLower(s[0])
-            ? s
-            : char.ToLowerInvariant(s[0]) + s[1..];
 }

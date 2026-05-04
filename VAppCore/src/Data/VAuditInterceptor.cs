@@ -14,7 +14,7 @@ public class VAuditInterceptor<TUserKey, TTenantKey> : ISaveChangesInterceptor
     where TUserKey : IEquatable<TUserKey>
     where TTenantKey : IEquatable<TTenantKey>
 {
-    private const string DeletedByPropertyName = "DeletedBy";
+    internal const string DeletedByPropertyName = "DeletedBy";
 
     private readonly ICurrentUser<TUserKey, TTenantKey>? _currentUser;
 
