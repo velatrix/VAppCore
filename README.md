@@ -12,6 +12,7 @@ Enterprise .NET 10 library for building web APIs. Provides base entities with au
 - [Query Parsing (RSQL)](#query-parsing-rsql)
 - [VQueryFilter](#vqueryfilter)
 - [Domain Events + Outbox](#domain-events--outbox)
+- [Audit Log](#audit-log)
 - [Optimistic Concurrency](#optimistic-concurrency)
 - [Rate Limiting](#rate-limiting)
 - [Error Handling](#error-handling)
@@ -1196,6 +1197,84 @@ Pick A when the consumer can lag (notifications, analytics). Pick B when the rel
 | `MaxBackoff` | 5min | Cap on exponential retry delay (`min(2^attempts, MaxBackoff)`) |
 | `PruneInterval` | 1h | How often Sent rows older than retention are deleted |
 | `RetentionDays` | 30 | Sent rows older than this are deleted by the prune pass |
+
+---
+
+## Audit Log
+
+Opt-in per-entity history with field-level JSONB diffs, written in the same transaction as the change. Use it for moderation, fraud investigation, GDPR exports — wherever you need to answer "who changed what, when, and from what to what."
+
+### Setup
+
+```csharp
+// Program.cs
+services.AddVAppCoreAuditLog<HubDbContext, Guid, Guid>();
+
+services.AddDbContext<HubDbContext>((sp, opts) =>
+{
+    opts.UseNpgsql(connStr);
+    opts.UseVAppCore<HubDbContext, Guid, Guid>(sp);
+    opts.AddVAppCoreAuditInterceptors<HubDbContext, Guid, Guid>(sp);
+});
+```
+
+Add `DbSet<AuditLog>` to your DbContext and create an EF migration. The interceptor throws a clear `InvalidOperationException` on the first save if you forget the DbSet.
+
+### Mark entities to track
+
+```csharp
+public class Lobby : VEntity<Guid, Guid, Guid>, IAuditedEntity
+{
+    public string Name { get; set; } = null!;
+    public int MaxPlayers { get; set; }
+
+    [NotAudited]
+    public DateTimeOffset LastSeenAt { get; set; } // excluded from diffs
+}
+```
+
+Entities without `IAuditedEntity` are completely ignored — zero overhead.
+
+### Query history
+
+```csharp
+public class LobbiesController(IAuditLog audit) : ControllerBase
+{
+    [HttpGet("{id}/history")]
+    public Task<IReadOnlyList<AuditLog>> History(Guid id)
+        => audit.GetHistoryAsync<Lobby>(id);
+}
+```
+
+Returns rows newest-first, indexed on `(EntityType, EntityId)`.
+
+### Suppress for bulk imports
+
+```csharp
+using (audit.Suppress())
+{
+    db.Lobbies.AddRange(thousandsOfLobbies);
+    await db.SaveChangesAsync();
+}
+// no audit rows written; nested scopes use a depth counter
+```
+
+### Diff JSON shape
+
+```jsonc
+// Modify
+{ "name": { "old": "Old", "new": "New" }, "maxPlayers": { "old": 4, "new": 8 } }
+
+// Add
+{ "name": { "old": null, "new": "Initial" } }
+
+// Delete (hard or soft)
+{ "name": { "old": "Final", "new": null } }
+```
+
+### Default-skipped fields
+
+The diff never includes audit/concurrency/soft-delete metadata: `CreatedAt`, `UpdatedAt`, `CreatedBy`, `UpdatedBy`, `RowVersion`, `Xmin`, `IsDeleted`, `DeletedAt`, `DeletedBy`. Soft-deletes are recorded with `Action = Delete` (not as an `IsDeleted` field flip). Mark additional fields with `[NotAudited]` to keep noisy fields out of the diff.
 
 ---
 

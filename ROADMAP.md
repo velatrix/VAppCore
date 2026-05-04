@@ -131,7 +131,7 @@ Once 1.1.0 ships, Hub does:
 
 ---
 
-## v1.7.0 — Audit log table
+## ~~v1.7.0 — Audit log table~~ (shipped 2026-05-05)
 
 **Problem:** `VEntity` only stores last-modified info. Moderation, fraud investigation, and account-deletion compliance need who-changed-what-when history.
 
