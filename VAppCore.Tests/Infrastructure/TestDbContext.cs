@@ -173,7 +173,23 @@ public static class TestFactory
     }
 
     public static (TestDbContext Db, TestCurrentUser User) CreateAuditLogDbContext(bool authenticated = true)
-        => throw new NotImplementedException("Wired in Task 5");
+    {
+        var user = new TestCurrentUser { IsAuthenticated = authenticated };
+        var sp = BuildServiceProvider(user);
+
+        var auditInterceptor = new AuditLogInterceptor<Guid, Guid>(authenticated ? user : null);
+        var vAuditInterceptor = new VAuditInterceptor<Guid, Guid>(authenticated ? user : null);
+
+        var options = new DbContextOptionsBuilder<TestDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            // VAuditInterceptor registered FIRST: it transforms Deleted→Modified for ISoftDeletable
+            // before AuditLogInterceptor sees the entry. AuditLogInterceptor still works either way
+            // (it detects soft delete by IsDeleted false→true), but this matches production wiring.
+            .AddInterceptors(vAuditInterceptor, auditInterceptor)
+            .Options;
+
+        return (new TestDbContext(options), user);
+    }
 
     private static IServiceProvider BuildServiceProvider(TestCurrentUser user)
     {
