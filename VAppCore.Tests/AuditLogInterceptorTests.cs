@@ -117,4 +117,22 @@ public class AuditLogInterceptorTests
         Assert.False(doc.RootElement.TryGetProperty("deletedAt", out _));
         Assert.False(doc.RootElement.TryGetProperty("deletedBy", out _));
     }
+
+    [Fact]
+    public async Task NonAuditedEntity_NoAuditRowsWritten()
+    {
+        var (db, _) = TestFactory.CreateAuditLogDbContext();
+        var simple = new TestSimpleEntity { Id = Guid.NewGuid(), Name = "ignored" };
+        db.SimpleEntities.Add(simple);
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        simple.Name = "still ignored";
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        db.SimpleEntities.Remove(simple);
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var rows = await db.AuditLogs.ToListAsync(TestContext.Current.CancellationToken);
+        Assert.Empty(rows);
+    }
 }
