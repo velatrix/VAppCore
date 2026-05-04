@@ -48,8 +48,7 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<ApiKeyAu
         var claims = new List<Claim>
         {
             new(_coreOptions.UserIdClaim, key.Id.ToString()),
-            new(ClaimTypes.Name, key.Name),
-            new("apiKeyId", key.Id.ToString())
+            new(ClaimTypes.Name, key.Name)
         };
         foreach (var perm in key.Permissions)
             claims.Add(new Claim(_coreOptions.PermissionClaim, perm));
@@ -58,8 +57,12 @@ public sealed class ApiKeyAuthenticationHandler : AuthenticationHandler<ApiKeyAu
         var principal = new ClaimsPrincipal(identity);
         var ticket = new AuthenticationTicket(principal, Scheme.Name);
 
-        // Fire-and-forget LastUsedAt update — not awaited; failure here must not block the request.
-        _ = _service.MarkUsedAsync(key.Id, CancellationToken.None);
+        // Fire-and-forget LastUsedAt update — not awaited; failure here must not block the request,
+        // but we do want failures to be observable rather than silently swallowed.
+        _ = _service.MarkUsedAsync(key.Id, CancellationToken.None)
+            .ContinueWith(
+                t => Logger.LogWarning(t.Exception, "MarkUsedAsync failed for ApiKey {ApiKeyId}", key.Id),
+                TaskContinuationOptions.OnlyOnFaulted);
 
         return AuthenticateResult.Success(ticket);
     }

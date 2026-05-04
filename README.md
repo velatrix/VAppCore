@@ -308,6 +308,13 @@ public interface ICurrentUser<TUserKey, TTenantKey>
     IReadOnlyList<string> Roles { get; }
     IReadOnlyList<string> Permissions { get; }
     bool IsAuthenticated { get; }
+
+    /// <summary>
+    /// Auth scheme name from the underlying ClaimsPrincipal (e.g. "Cookies", "ApiKey").
+    /// Null for unauthenticated callers.
+    /// </summary>
+    string? AuthenticationType { get; }
+
     bool IsInRole(string role);
     bool HasPermission(string permission);
 }
@@ -1344,8 +1351,8 @@ var (newKey, newSecret) = await keys.RotateAsync(id);  // revoke old, create new
 
 | Situation | Response |
 |---|---|
-| Missing `X-Api-Key` (with `[VAuthorize(ApiKey=...)]`) | 401 `unauthenticated` |
-| Unknown / revoked / expired key | 401 `api_key.invalid` / `api_key.revoked` / `api_key.expired` |
+| Missing `X-Api-Key` on `[VAuthorize(ApiKey=...)]` endpoint | 401 `server.errors.unauthenticated` |
+| Unknown / revoked / expired key | 401 (uniform `Authentication failed` — no distinction by design, prevents enumeration via timing) |
 | User cookie on `[VAuthorize(ApiKey=...)]` endpoint | 403 `api_key.required` |
 | ApiKey valid but missing permission | 403 `permission.required` |
 
