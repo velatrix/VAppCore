@@ -70,4 +70,26 @@ public class AuditLogInterceptorTests
         var rows = await db.AuditLogs.ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(rows);
     }
+
+    [Fact]
+    public async Task HardDelete_Audited_WritesAuditRow_WithActionDelete()
+    {
+        var (db, _) = TestFactory.CreateAuditLogDbContext();
+        var entity = new TestAuditedEntity { Id = Guid.NewGuid(), Name = "Doomed", Score = 99 };
+        db.AuditedEntities.Add(entity);
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        db.AuditedEntities.Remove(entity);
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var deleteRow = await db.AuditLogs
+            .Where(a => a.Action == AuditAction.Delete)
+            .SingleAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(entity.Id.ToString(), deleteRow.EntityId);
+
+        using var doc = JsonDocument.Parse(deleteRow.Changes);
+        Assert.True(doc.RootElement.TryGetProperty("name", out var name));
+        Assert.Equal("Doomed", name.GetProperty("old").GetString());
+        Assert.Equal(JsonValueKind.Null, name.GetProperty("new").ValueKind);
+    }
 }
