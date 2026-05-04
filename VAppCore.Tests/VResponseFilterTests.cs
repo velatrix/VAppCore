@@ -55,7 +55,7 @@ public class VResponseFilterTests
         {
             Items = [new { Id = 1 }],
             Page = 1,
-            Size = 10,
+            Limit = 10,
             TotalItems = 1
         };
         var result = new OkObjectResult(paged);

@@ -69,24 +69,24 @@ public class VQueryParserTests
     }
 
     [Fact]
-    public void Size_DefaultsTo20()
+    public void Limit_DefaultsTo20()
     {
         var parser = CreateParser();
-        Assert.Equal(20, parser.Size);
+        Assert.Equal(20, parser.Limit);
     }
 
     [Fact]
-    public void Size_ReadsFromQueryString()
+    public void Limit_ReadsFromQueryString()
     {
-        var parser = CreateParser(new() { ["size"] = "50" });
-        Assert.Equal(50, parser.Size);
+        var parser = CreateParser(new() { ["limit"] = "50" });
+        Assert.Equal(50, parser.Limit);
     }
 
     [Fact]
-    public void Size_CapsAt100()
+    public void Limit_CapsAt100()
     {
-        var parser = CreateParser(new() { ["size"] = "500" });
-        Assert.Equal(100, parser.Size);
+        var parser = CreateParser(new() { ["limit"] = "500" });
+        Assert.Equal(100, parser.Limit);
     }
 
     // ── EffectiveSort ──
@@ -214,7 +214,7 @@ public class VQueryParserTests
             ["filter"] = "Age=gt=30",
             ["sort"] = "+Name",
             ["page"] = "1",
-            ["size"] = "5"
+            ["limit"] = "5"
         });
 
         var result = parser.Apply(users).ToList();
@@ -301,11 +301,11 @@ public class VQueryParserTests
             .Select(i => new User { Id = i })
             .AsQueryable();
 
-        var parser = CreateParser(new() { ["page"] = "3", ["size"] = "10" });
+        var parser = CreateParser(new() { ["page"] = "3", ["limit"] = "10" });
         var result = parser.ApplyPagination(users).ToList();
 
         Assert.Equal(10, result.Count);
-        Assert.Equal(21, result[0].Id); // Page 3, size 10 → skip 20
+        Assert.Equal(21, result[0].Id); // Page 3, limit 10 → skip 20
     }
 
     // ── GetRequiredIncludes ──

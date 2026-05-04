@@ -10,39 +10,55 @@ namespace VAppCore;
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers all VAppCore services: ICurrentUser, VAuthorize filter, VQueryParser binder.
-    /// Infers TKey, TUserKey, TTenantKey from the VDbContext base class of TDbContext.
+    /// Registers VAppCore services: ICurrentUser, MVC filters (VAuthorize, VResponse),
+    /// VQueryParser model binder, validation factory, and a DbContext alias so that
+    /// VServices can inject DbContext directly.
+    /// Pair with <c>options.UseVAppCore&lt;...&gt;(sp)</c> on the DbContext registration.
     /// </summary>
-    public static IServiceCollection AddVAppCore<TDbContext>(
+    public static IServiceCollection AddVAppCore<TDbContext, TUserKey, TTenantKey>(
         this IServiceCollection services,
-        Action<VAppCoreAuthOptions>? configureAuth = null)
+        Action<VAppCoreOptions>? configureOptions = null)
         where TDbContext : DbContext
+        where TUserKey : IEquatable<TUserKey>
+        where TTenantKey : IEquatable<TTenantKey>
     {
-        // Resolve generic types from VDbContext<TKey, TUserKey, TTenantKey>
-        var (keyType, userKeyType, tenantKeyType) = ResolveVDbContextTypes(typeof(TDbContext));
+        var optionsValue = new VAppCoreOptions();
+        configureOptions?.Invoke(optionsValue);
+        services.Configure<VAppCoreOptions>(o =>
+        {
+            o.UserIdClaim = optionsValue.UserIdClaim;
+            o.TenantIdClaim = optionsValue.TenantIdClaim;
+            o.RoleClaim = optionsValue.RoleClaim;
+            o.PermissionClaim = optionsValue.PermissionClaim;
+            o.EmailClaim = optionsValue.EmailClaim;
+            o.CursorEncryptionKeys = optionsValue.CursorEncryptionKeys;
+        });
 
-        // Auth options
-        if (configureAuth is not null)
-            services.Configure(configureAuth);
-        else
-            services.Configure<VAppCoreAuthOptions>(_ => { });
-
-        // HttpContextAccessor
         services.AddHttpContextAccessor();
 
-        // ICurrentUser<TUserKey, TTenantKey> → ClaimsCurrentUser<TUserKey, TTenantKey>
-        var currentUserGenericInterface = typeof(ICurrentUser<,>).MakeGenericType(userKeyType, tenantKeyType);
-        var currentUserImpl = typeof(ClaimsCurrentUser<,>).MakeGenericType(userKeyType, tenantKeyType);
-        services.TryAddScoped(currentUserGenericInterface, currentUserImpl);
+        // ICurrentUser<TUserKey, TTenantKey> → ClaimsCurrentUser
+        services.TryAddScoped<ICurrentUser<TUserKey, TTenantKey>, ClaimsCurrentUser<TUserKey, TTenantKey>>();
+        services.TryAddScoped<ICurrentUser>(sp => sp.GetRequiredService<ICurrentUser<TUserKey, TTenantKey>>());
 
-        // ICurrentUser (non-generic) → resolves from generic
-        services.TryAddScoped<ICurrentUser>(sp => (ICurrentUser)sp.GetRequiredService(currentUserGenericInterface));
+        // DbContext alias → TDbContext (so VServices can inject DbContext directly)
+        services.TryAddScoped<DbContext>(sp => sp.GetRequiredService<TDbContext>());
 
-        // VDbContext<TKey, TUserKey, TTenantKey> → resolves to TDbContext
-        var vDbContextType = typeof(VDbContext<,,>).MakeGenericType(keyType, userKeyType, tenantKeyType);
-        services.TryAddScoped(vDbContextType, sp => sp.GetRequiredService<TDbContext>());
+        // Cursor protector: AesGcm if any keys configured, NoOp otherwise.
+        // TryAddSingleton lets a custom ICursorProtector registered before AddVAppCore win.
+        if (optionsValue.CursorEncryptionKeys != null && optionsValue.CursorEncryptionKeys.Count > 0)
+        {
+            var keyBytes = optionsValue.CursorEncryptionKeys
+                .Select(Convert.FromBase64String)
+                .ToList();
+            services.TryAddSingleton<ICursorProtector>(_ => new AesGcmCursorProtector(keyBytes));
+        }
+        else
+        {
+            services.TryAddSingleton<ICursorProtector, NoOpCursorProtector>();
+        }
+        services.TryAddSingleton(sp => new CursorCodec(sp.GetRequiredService<ICursorProtector>()));
 
-        // MVC: model binder + authorize filter
+        // MVC filters and validation factory
         services.Configure<MvcOptions>(options =>
         {
             options.ModelBinderProviders.Insert(0, new VQueryParserBinderProvider());
@@ -50,7 +66,6 @@ public static class ServiceCollectionExtensions
             options.Filters.Add<VResponseFilter>();
         });
 
-        // Validation: convert model state errors to ErrorContext format
         services.Configure<ApiBehaviorOptions>(options =>
         {
             options.InvalidModelStateResponseFactory = context =>
@@ -82,7 +97,7 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registers a VService with auto-injected Db property.
+    /// Registers a single VService with auto-injected Db (resolved as DbContext) and CurrentUser.
     /// </summary>
     public static IServiceCollection AddVService<TService>(this IServiceCollection services)
         where TService : class
@@ -90,14 +105,15 @@ public static class ServiceCollectionExtensions
         services.AddScoped(sp =>
         {
             var service = ActivatorUtilities.CreateInstance<TService>(sp);
-            InjectDbContext(service, sp);
+            InjectVServiceDependencies(service, sp);
             return service;
         });
         return services;
     }
 
     /// <summary>
-    /// Scans assembly for all classes inheriting VService and registers them with auto-injected Db.
+    /// Scans assembly for all classes inheriting VService and registers them with auto-injected
+    /// Db (DbContext) and CurrentUser.
     /// </summary>
     public static IServiceCollection AddVServices(this IServiceCollection services, Assembly assembly)
     {
@@ -109,7 +125,7 @@ public static class ServiceCollectionExtensions
             services.AddScoped(type, sp =>
             {
                 var service = ActivatorUtilities.CreateInstance(sp, type);
-                InjectDbContext(service, sp);
+                InjectVServiceDependencies(service, sp);
                 return service;
             });
         }
@@ -128,23 +144,6 @@ public static class ServiceCollectionExtensions
 
     // ── Internals ──
 
-    private static (Type Key, Type UserKey, Type TenantKey) ResolveVDbContextTypes(Type dbContextType)
-    {
-        var current = dbContextType;
-        while (current is not null)
-        {
-            if (current.IsGenericType && current.GetGenericTypeDefinition() == typeof(VDbContext<,,>))
-            {
-                var args = current.GetGenericArguments();
-                return (args[0], args[1], args[2]);
-            }
-            current = current.BaseType;
-        }
-
-        throw new InvalidOperationException(
-            $"{dbContextType.Name} must inherit from VDbContext<TKey, TUserKey, TTenantKey>");
-    }
-
     private static bool IsVService(Type type)
     {
         var current = type.BaseType;
@@ -157,7 +156,7 @@ public static class ServiceCollectionExtensions
         return false;
     }
 
-    private static void InjectDbContext(object service, IServiceProvider sp)
+    private static void InjectVServiceDependencies(object service, IServiceProvider sp)
     {
         var type = service.GetType();
         var current = type.BaseType;
@@ -165,15 +164,20 @@ public static class ServiceCollectionExtensions
         {
             if (current.IsGenericType && current.GetGenericTypeDefinition() == typeof(VService<,,,>))
             {
-                var dbProp = current.GetProperty("Db", BindingFlags.Public | BindingFlags.Instance);
-                if (dbProp is not null)
-                {
-                    var db = sp.GetRequiredService(dbProp.PropertyType);
-                    dbProp.SetValue(service, db);
-                }
+                InjectProperty(service, current, "Db", sp);
+                InjectProperty(service, current, "CurrentUser", sp);
+                InjectProperty(service, current, "CursorCodec", sp);
                 return;
             }
             current = current.BaseType;
         }
+    }
+
+    private static void InjectProperty(object service, Type declaringType, string propertyName, IServiceProvider sp)
+    {
+        var prop = declaringType.GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
+        if (prop is null) return;
+        var value = sp.GetRequiredService(prop.PropertyType);
+        prop.SetValue(service, value);
     }
 }

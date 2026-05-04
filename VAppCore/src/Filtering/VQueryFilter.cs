@@ -14,6 +14,11 @@ public interface IVQueryFilter
     IReadOnlyList<string>? DefaultSelect { get; }
     string? DefaultSort { get; }
     IReadOnlyDictionary<string, CustomFieldDefinition> CustomFields { get; }
+    /// <summary>
+    /// True if this filter opts in to offset/page-based pagination via ?page=N.
+    /// When false, only cursor pagination is supported and ?page=N requests are rejected.
+    /// </summary>
+    bool PageNavigationEnabled { get; }
     string ResolveFieldName(string fieldName);
     bool IsFieldFilterable(string fieldName);
     bool IsFieldSortable(string fieldName);
@@ -95,6 +100,7 @@ public abstract class VQueryFilter<T> : IVQueryFilter where T : class
     private readonly Dictionary<string, CustomFieldDefinition> _customFields = new(StringComparer.OrdinalIgnoreCase);
     private string? _defaultSort;
     private List<string>? _defaultSelect;
+    private bool _pageNavigationEnabled;
 
     public Type EntityType => typeof(T);
     public IReadOnlySet<string> FilterableFields => _filterableFields;
@@ -104,6 +110,7 @@ public abstract class VQueryFilter<T> : IVQueryFilter where T : class
     public IReadOnlyDictionary<string, CustomFieldDefinition> CustomFields => _customFields;
     public string? DefaultSort => _defaultSort;
     public IReadOnlyList<string>? DefaultSelect => _defaultSelect;
+    public bool PageNavigationEnabled => _pageNavigationEnabled;
 
     /// <summary>
     /// Sets the default sort to use when no sort parameter is provided.
@@ -121,6 +128,17 @@ public abstract class VQueryFilter<T> : IVQueryFilter where T : class
     protected void SetDefaultSelect(params string[] fields)
     {
         _defaultSelect = fields.ToList();
+    }
+
+    /// <summary>
+    /// Opts this filter in to offset/page-based pagination. The endpoint then accepts
+    /// <c>?page=N</c> in addition to <c>?cursor=X</c>. A COUNT query runs only when
+    /// <c>?page=N</c> is requested (cursor mode keeps its perf benefit).
+    /// Without this opt-in, <c>?page=N</c> requests return 400.
+    /// </summary>
+    protected void EnablePageNavigation()
+    {
+        _pageNavigationEnabled = true;
     }
 
     /// <summary>

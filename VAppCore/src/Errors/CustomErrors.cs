@@ -114,3 +114,20 @@ public class SystemError : BaseError
             Error = error
         }) { }
 }
+
+public class RateLimitedError : BaseError
+{
+    /// <summary>How long the client should wait before retrying.</summary>
+    public TimeSpan? RetryAfter { get; }
+
+    public RateLimitedError(ErrorObject error, TimeSpan? retryAfter = null)
+        : base(429, new ErrorContext
+        {
+            Title = "Rate Limited",
+            TitleKey = "server.errors.rateLimited",
+            Error = error
+        })
+    {
+        RetryAfter = retryAfter;
+    }
+}

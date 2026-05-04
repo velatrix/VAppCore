@@ -1,16 +1,19 @@
 # VAppCore
 
-Enterprise .NET 8 library for building web APIs. Provides base entities with audit fields, authentication/authorization, RSQL query parsing with field-level control, service base class, structured error handling, and response mapping enforcement.
+Enterprise .NET 10 library for building web APIs. Provides base entities with audit fields, authentication/authorization, RSQL query parsing with field-level control, service base class, structured error handling, and response mapping enforcement.
 
 ## Table of Contents
 
 - [Quick Start](#quick-start)
 - [Entity Foundation](#entity-foundation)
-- [VDbContext](#vdbcontext)
+- [DbContext Setup](#dbcontext-setup)
 - [Authentication & Authorization](#authentication--authorization)
 - [VService](#vservice)
 - [Query Parsing (RSQL)](#query-parsing-rsql)
 - [VQueryFilter](#vqueryfilter)
+- [Domain Events + Outbox](#domain-events--outbox)
+- [Optimistic Concurrency](#optimistic-concurrency)
+- [Rate Limiting](#rate-limiting)
 - [Error Handling](#error-handling)
 - [Response Mapping](#response-mapping)
 - [Full Example](#full-example)
@@ -21,16 +24,21 @@ Enterprise .NET 8 library for building web APIs. Provides base entities with aud
 
 ### Setup
 
+VAppCore is wired entirely at the DI / options level. Your `DbContext` class needs no VAppCore-specific code — inherit `DbContext` (or `IdentityDbContext`, or any other base) directly.
+
 ```csharp
 // Program.cs
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddDbContext<AppDbContext>(o =>
-    o.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
+builder.Services.AddDbContext<AppDbContext>((sp, options) =>
+{
+    options.UseNpgsql(builder.Configuration.GetConnectionString("Default"));
+    options.UseVAppCore<AppDbContext, Guid, Guid>(sp);   // wires audit interceptor + global filters
+});
 
 builder.Services.AddControllers();
 
-builder.Services.AddVAppCore<AppDbContext>(options =>
+builder.Services.AddVAppCore<AppDbContext, Guid, Guid>(options =>
 {
     options.UserIdClaim = "sub";
     options.TenantIdClaim = "tenant_id";
@@ -50,6 +58,8 @@ app.MapControllers();
 
 app.Run();
 ```
+
+The two type parameters on both `UseVAppCore` and `AddVAppCore` are `TUserKey` and `TTenantKey` — the types you'll use for user and tenant ids throughout the app (typically `Guid, Guid`).
 
 ---
 
@@ -110,7 +120,7 @@ public class Product : AppEntity, ISoftDeletable
     public bool IsDeleted { get; set; }
     public DateTimeOffset? DeletedAt { get; set; }
 
-    // Optional — add this property and VDbContext sets it automatically:
+    // Optional — add this property and VAuditInterceptor sets it automatically:
     public Guid? DeletedBy { get; set; }
 }
 ```
@@ -127,9 +137,9 @@ var all = await db.Products.IgnoreQueryFilters().ToListAsync();
 
 ### ITenantScoped
 
-Opt-in interface for multi-tenancy. VDbContext automatically:
-- Sets `TenantId` from the current user on new entities
-- Applies a global query filter — queries only return data for the current tenant
+Opt-in interface for multi-tenancy. With VAppCore wired:
+- `VAuditInterceptor` sets `TenantId` from the current user on new entities (when not already set)
+- `ApplyVAppCoreFilters` adds a global query filter that scopes queries to the current tenant — but only when your DbContext implements `IVTenantContext<TTenantKey>` (see DbContext Setup below)
 
 ```csharp
 public class Product : AppEntity, ITenantScoped<Guid>
@@ -158,24 +168,78 @@ public class Product : AppEntity, ISoftDeletable, ITenantScoped<Guid>
 
 ---
 
-## VDbContext
+## DbContext Setup
 
-### Setup
+### Plain DbContext
 
-Inherit from `VDbContext<TKey, TUserKey, TTenantKey>`:
+Your `DbContext` class is plain — no VAppCore base class to inherit:
 
 ```csharp
-public class AppDbContext : VDbContext<Guid, Guid, Guid>
+public class AppDbContext : DbContext
 {
     public DbSet<Product> Products => Set<Product>();
     public DbSet<Order> Orders => Set<Order>();
 
-    public AppDbContext(DbContextOptions<AppDbContext> options, IServiceProvider sp)
-        : base(options, sp) { }
+    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 }
 ```
 
-### What it does automatically on SaveChanges
+All the wiring happens at registration time:
+
+```csharp
+services.AddDbContext<AppDbContext>((sp, options) =>
+{
+    options.UseNpgsql(connectionString);
+    options.UseVAppCore<AppDbContext, Guid, Guid>(sp);
+});
+```
+
+`UseVAppCore` does two things:
+1. Adds `VAuditInterceptor` (handles audit fields, soft delete, tenant assignment on SaveChanges)
+2. Replaces `IModelCustomizer` with one that calls `ApplyVAppCoreFilters` after your `OnModelCreating` runs (handles soft-delete and tenant global query filters)
+
+### Works with any DbContext base
+
+Because the wiring is at the options level, your context can inherit anything — `DbContext`, `IdentityDbContext`, a Cosmos base, your own custom base. The setup is identical:
+
+```csharp
+// ASP.NET Identity case
+public class ApplicationDbContext : IdentityDbContext<ApplicationUser, IdentityRole<Guid>, Guid>
+{
+    public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options) { }
+}
+
+services.AddDbContext<ApplicationDbContext>((sp, options) =>
+{
+    options.UseNpgsql(connectionString);
+    options.UseVAppCore<ApplicationDbContext, Guid, Guid>(sp);
+});
+```
+
+Identity keeps owning the AspNet* tables and their existing audit fields. VAppCore audits, soft-deletes, and tenant-scopes everything else.
+
+### Multi-tenancy: implement IVTenantContext
+
+Tenant scoping is opt-in. If your app is multi-tenant, implement `IVTenantContext<TTenantKey>` on your DbContext so the global query filter can read the current tenant:
+
+```csharp
+public class AppDbContext : DbContext, IVTenantContext<Guid>
+{
+    private readonly ICurrentUser<Guid, Guid>? _currentUser;
+
+    public AppDbContext(DbContextOptions<AppDbContext> options, IServiceProvider sp) : base(options)
+    {
+        _currentUser = sp.GetService<ICurrentUser<Guid, Guid>>();
+    }
+
+    public Guid CurrentTenantId =>
+        _currentUser is { IsAuthenticated: true } ? _currentUser.TenantId : default;
+}
+```
+
+If you don't implement `IVTenantContext`, `ITenantScoped<T>` entities still get their `TenantId` auto-assigned on Add (when authenticated), but no global query filter is applied.
+
+### What the interceptor does on SaveChanges
 
 **Added entities:**
 - Sets `CreatedAt`, `UpdatedAt` to current UTC time
@@ -193,6 +257,8 @@ public class AppDbContext : VDbContext<Guid, Guid, Guid>
 
 **Deleted entities (not ISoftDeletable):**
 - Normal `DELETE` — row removed from database
+
+> **Tenant assignment respects explicit values.** `TenantId` is only auto-assigned on Add when the entity's `TenantId` is currently default. Admin tools or seed code that explicitly set `TenantId` are respected.
 
 ### TransactionAsync
 
@@ -252,7 +318,7 @@ The library provides `ClaimsCurrentUser` — reads from `ClaimsPrincipal`, works
 Configured via `AddVAppCore`:
 
 ```csharp
-builder.Services.AddVAppCore<AppDbContext>(options =>
+builder.Services.AddVAppCore<AppDbContext, Guid, Guid>(options =>
 {
     options.UserIdClaim = "sub";           // default
     options.TenantIdClaim = "tenant_id";   // default
@@ -261,6 +327,16 @@ builder.Services.AddVAppCore<AppDbContext>(options =>
     options.EmailClaim = "email";           // default
 });
 ```
+
+### UseAspNetIdentity preset
+
+When the auth layer is ASP.NET Identity (cookies issued by `SignInManager`), claims are emitted under `ClaimTypes.NameIdentifier` / `ClaimTypes.Role` / `ClaimTypes.Email` rather than the OIDC defaults. Use the preset to switch all three at once:
+
+```csharp
+builder.Services.AddVAppCore<ApplicationDbContext, Guid, Guid>(o => o.UseAspNetIdentity());
+```
+
+The preset only mutates options — it adds **no package dependency** on Identity. `ClaimTypes` is in `System.Security.Claims` (the BCL).
 
 ### IPermissionResolver (Database-based)
 
@@ -467,7 +543,7 @@ public override async Task DeleteAsync(Guid id)
 
 ## Query Parsing (RSQL)
 
-VQueryParser reads `filter`, `sort`, `select`, `page`, and `size` from query parameters and applies them to an `IQueryable`.
+VQueryParser reads `filter`, `sort`, `select`, `cursor` / `before`, `page`, and `limit` from query parameters and applies them to an `IQueryable`.
 
 ### Query Parameters
 
@@ -476,8 +552,10 @@ VQueryParser reads `filter`, `sort`, `select`, `page`, and `size` from query par
 | `filter` | `name==John;age=gt=25` | RSQL filter expression |
 | `sort` | `-createdAt,+name` | `+` ascending, `-` descending |
 | `select` | `id,name,email` | Fields to include in response |
-| `page` | `2` | Page number (1-based, default: 1) |
-| `size` | `20` | Page size (default: 20, max: 100) |
+| `limit` | `20` | Rows per page (default: 20, max: 100) |
+| `cursor` | `eyJzIjoiK25hbWUiLCJ2IjpbXX0=` | Forward cursor — returns rows after this position |
+| `before` | `eyJzIjoiK25hbWUiLCJ2IjpbXX0=` | Backward cursor — returns rows before this position |
+| `page` | `2` | Page number (1-based) — only on filters that opt in via `EnablePageNavigation()` |
 
 ### RSQL Operators
 
@@ -528,20 +606,99 @@ name=='it\'s escaped'
 ### Applying to IQueryable
 
 ```csharp
-// Filter + sort + pagination (no field selection):
+// Filter + sort + offset pagination (no field selection):
 IQueryable<T> result = parser.Apply(queryable);
 
-// Filter + sort + pagination + total count:
+// Filter + sort + offset pagination + total count:
 var (items, totalCount) = await parser.ApplyWithCountAsync<T>(queryable);
 
-// Filter + sort + pagination + field projection (uses VQueryFilter selectable fields):
+// Filter + sort + offset pagination + field projection:
 VPagedResponse<object> result = await parser.ApplyWithProjectionAsync<T>(queryable);
+
+// Cursor pagination (forward via ?cursor=X, backward via ?before=X):
+VPagedResponse<T> result = await parser.ApplyWithCursorAsync<T>(queryable, codec);
+VPagedResponse<object> result = await parser.ApplyWithCursorProjectionAsync<T>(queryable, codec);
 
 // Individual operations:
 queryable = parser.ApplyFilter(queryable);
 queryable = parser.ApplySort(queryable);
 queryable = parser.ApplyPagination(queryable);
 ```
+
+### Cursor pagination
+
+`VService.GetPagedAsync(parser)` is the unified entry — it picks the mode based on the request:
+
+- `?cursor=X` (or no pagination params) → cursor mode (fast keyset query, no COUNT)
+- `?before=X` → backward cursor mode (returns rows in display order, before the cursor)
+- `?page=N` → offset mode — only if the filter opted in via `EnablePageNavigation()`, otherwise 400
+
+Cursor encodes the request's sort fields plus the entity Id as a stable tiebreaker, so paging is correct under concurrent inserts and constant-time at any depth. Limit can change between requests freely. If sort changes, the cursor is silently discarded and the response is page 1 of the new sort — detect via `previousCursor === null`.
+
+**Response shape — single `VPagedResponse<T>` for both modes:**
+
+```json
+{
+  "items": [...],
+  "limit": 50,
+  "hasMore": true,
+  "nextCursor": "...",          // null when no more rows
+  "previousCursor": "...",      // null on the first page
+  "page": 2,                    // populated only in offset mode
+  "totalItems": 5000,           // populated only in offset mode (COUNT runs)
+  "totalPages": 100             // computed from totalItems / limit
+}
+```
+
+**Opting a filter into page-navigation:**
+
+```csharp
+public class UserAdminFilter : VQueryFilter<User>
+{
+    public UserAdminFilter()
+    {
+        AllowAll();
+        EnablePageNavigation();   // ← lets the endpoint accept ?page=N
+    }
+}
+```
+
+**Cursor encryption (optional, with key rotation):**
+
+By default, cursors are unencrypted base64-of-JSON — opaque to clients but tamperable. Configure one or more 32-byte (256-bit) AES-GCM keys to make them tamper-proof and unreadable:
+
+```csharp
+// Single key — simplest setup
+services.AddVAppCore<AppDb, Guid, Guid>(o =>
+{
+    o.CursorEncryptionKeys = [builder.Configuration["VAppCore:CursorKey"]!];
+});
+
+// Key rotation — encrypt with the first key, decrypt by trying each in order
+services.AddVAppCore<AppDb, Guid, Guid>(o =>
+{
+    o.CursorEncryptionKeys = [
+        builder.Configuration["VAppCore:CursorKey"]!,        // current
+        builder.Configuration["VAppCore:CursorKey:Previous"]! // accepted during transition window
+    ];
+});
+```
+
+Rotation flow: deploy with `[newKey, oldKey]` so existing cursors keep decrypting. After enough time has passed that all in-flight cursors are gone (typical: 1 day), redeploy with `[newKey]` only.
+
+For KMS / Azure Key Vault, register a custom `ICursorProtector` in DI before calling `AddVAppCore` — it wins over the built-in `AesGcmCursorProtector`.
+
+**NULL handling in cursor sorts:**
+
+Sort fields with NULL values are handled correctly: NULLs always sort LAST regardless of `+` (asc) or `-` (desc) direction. Cursor positioned in the non-null section continues normally and crosses into the NULL section as expected. Cursor positioned at a NULL value paginates within the NULL section (ordered by id tiebreaker).
+
+**`CustomField` as cursor sort:**
+
+Sorting by a `CustomField` (via `WithExpression`, `CountOf`, `FromNavigation`, `WithNullCheck`) is rejected with HTTP 400 in cursor mode — the computed expression can't be reliably reproduced in the cursor's WHERE clause. Use offset pagination (`?page=N` on a filter with `EnablePageNavigation()`) when sorting by computed fields, or sort by a real entity property.
+
+**Fundamental cursor-pagination limitation:**
+
+If a row's sort-field value changes between cursor requests (e.g., a user's score updates while you're paginating a leaderboard), that row may be skipped or appear twice. This is true of every cursor pagination implementation — mitigations require snapshot tables or serializable transactions.
 
 ### Standalone RSQL Extension
 
@@ -888,11 +1045,20 @@ GET /products?sort=-price,+name
 # Select specific fields
 GET /products?select=id,name,price,category.name,orderCount
 
-# Pagination
-GET /products?page=2&size=25
+# Cursor pagination (default — first page)
+GET /products?limit=25
 
-# Everything combined
-GET /products?filter=price=gt=100;status==Active&sort=-createdAt&select=id,name,price&page=1&size=10
+# Cursor pagination — next page
+GET /products?cursor=eyJzIjoiK25hbWUiLCJ2IjpbXX0=&limit=25
+
+# Cursor pagination — previous page
+GET /products?before=eyJzIjoiK25hbWUiLCJ2IjpbXX0=&limit=25
+
+# Offset pagination (filter must opt-in via EnablePageNavigation)
+GET /products?page=2&limit=25
+
+# Everything combined (cursor mode)
+GET /products?filter=price=gt=100;status==Active&sort=-createdAt&select=id,name,price&limit=10
 ```
 
 Response format for `ApplyWithProjectionAsync`:
@@ -903,12 +1069,381 @@ Response format for `ApplyWithProjectionAsync`:
     { "id": "...", "name": "iPhone", "price": 999 },
     { "id": "...", "name": "MacBook", "price": 1999 }
   ],
+  "limit": 10,
   "page": 1,
-  "size": 10,
   "totalItems": 42,
-  "totalPages": 5
+  "totalPages": 5,
+  "nextCursor": "...",
+  "previousCursor": null,
+  "hasMore": true
 }
 ```
+
+---
+
+## Domain Events + Outbox
+
+When something happens in the domain — a user registers, a match completes, a friendship is accepted — you often want multiple things to react: send an email, update analytics, notify friends, recompute a leaderboard. Inlining all reactions into the service that triggered the change couples that service to every consumer and offers no reliability guarantees if any consumer fails. Wrapping in a database transaction can't help — external side effects (HTTP calls, emails, push notifications) cannot participate in a database transaction.
+
+VAppCore ships a transactional outbox: raise events on entities, the interceptor persists them to an `OutboxMessages` table in the same transaction as the entity changes, and a background processor delivers them to handlers with retry, dead-letter, and pruning.
+
+### Define an event and a handler
+
+```csharp
+public record UserRegistered(Guid UserId, string Email) : IDomainEvent;
+
+public class SendWelcomeEmail : IDomainEventHandler<UserRegistered>
+{
+    private readonly IEmailService _email;
+    public SendWelcomeEmail(IEmailService email) => _email = email;
+
+    public Task Handle(UserRegistered evt, EventContext ctx, CancellationToken ct)
+        => _email.SendWelcomeAsync(evt.Email);
+}
+```
+
+### Raise the event in your service
+
+```csharp
+public class UserService : AppService<User>
+{
+    public async Task<User> Register(RegisterDto dto)
+    {
+        var user = new User { Email = dto.Email };
+        Set.Add(user);
+        user.RaiseEvent(new UserRegistered(user.Id, user.Email));
+        await Db.SaveChangesAsync();
+        return user;
+    }
+}
+```
+
+`RaiseEvent` only adds the event to an in-memory list on the entity. The `OutboxInterceptor` runs during `SaveChanges`, walks the change tracker, finds entities with pending events, and inserts an `OutboxMessage` row for each — atomically with the entity change. Either both commit (user + outbox row) or neither does.
+
+### Wire it up
+
+```csharp
+// Program.cs
+services.AddDbContext<AppDbContext>((sp, options) =>
+{
+    options.UseNpgsql(connStr);
+    options.UseVAppCore<AppDbContext, Guid, Guid>(sp);
+    options.AddInterceptors(sp.GetRequiredService<OutboxInterceptor>());
+});
+
+services.AddVAppCore<AppDbContext, Guid, Guid>();
+services.AddVAppCoreOutbox<AppDbContext>(o =>
+{
+    o.PollInterval = TimeSpan.FromSeconds(2);
+    o.MaxAttempts = 10;
+    o.MaxBackoff = TimeSpan.FromMinutes(5);
+    o.RetentionDays = 30;
+});
+services.AddDomainEventHandlers(typeof(Program).Assembly);
+```
+
+Add `DbSet<OutboxMessage>` to your `DbContext` and create an EF migration to materialize the table.
+
+### What happens at runtime
+
+- `Register` returns when the database commit completes — fast, ~5ms. The user gets `202 Accepted`.
+- A background `OutboxProcessor` polls `OutboxMessages WHERE Status = 'Pending'` every `PollInterval`.
+- For each row, it deserializes the payload, resolves all `IDomainEventHandler<T>` instances from DI, and invokes each. On success, the row is marked `Sent` (and pruned later). On failure, the row stays `Pending` with `NextRetryAt` set per exponential backoff.
+- After `MaxAttempts` failures, the row moves to `DeadLettered` for manual review.
+
+### Handler idempotency
+
+The outbox guarantees at-least-once delivery, not exactly-once. If your process crashes after a handler completes its work but before the row is marked `Sent`, the next poll will re-dispatch and the handler will run again. **Handlers must be idempotent.**
+
+The `EventContext` parameter carries the unique `MessageId` of the outbox row — handlers can use it as an idempotency key (e.g., write to a `ProcessedEvents` table; check before doing the work):
+
+```csharp
+public Task Handle(UserRegistered evt, EventContext ctx, CancellationToken ct)
+{
+    // ctx.MessageId is the unique outbox row id.
+    // ctx.Attempt is the 1-based retry count.
+    // Use these for idempotency or "log only on first attempt" logic.
+    return DoTheWork(evt);
+}
+```
+
+### Cross-aggregate writes — keep them in their own services
+
+If your registration needs to also create a `PlayerProfile` and a `Friendship`, don't reach into those tables directly from `UserService`. Either:
+
+**Pattern A — eventual:** Each is its own handler.
+```csharp
+public class CreateDefaultProfile : IDomainEventHandler<UserRegistered>
+{
+    private readonly PlayerProfileService _profiles;
+    public CreateDefaultProfile(PlayerProfileService profiles) => _profiles = profiles;
+    public Task Handle(UserRegistered evt, EventContext ctx, CancellationToken ct)
+        => _profiles.Create(evt.UserId);
+}
+```
+
+**Pattern B — synchronous, in-transaction:** Call the owner services from `UserService` inside `Db.TransactionAsync(...)`, raise the event for the *external* side effects (email, analytics) only.
+
+Pick A when the consumer can lag (notifications, analytics). Pick B when the related state must be visible immediately (profile must exist for the API to serve the user).
+
+### Configuration
+
+| Option | Default | Description |
+|---|---|---|
+| `PollInterval` | 2s | How often the processor checks for Pending rows |
+| `BatchSize` | 50 | Max rows fetched per poll |
+| `MaxAttempts` | 10 | Failures before a row is dead-lettered |
+| `MaxBackoff` | 5min | Cap on exponential retry delay (`min(2^attempts, MaxBackoff)`) |
+| `PruneInterval` | 1h | How often Sent rows older than retention are deleted |
+| `RetentionDays` | 30 | Sent rows older than this are deleted by the prune pass |
+
+---
+
+## Optimistic Concurrency
+
+Catches the "two requests modify the same row at the same time, second one silently overwrites the first" failure mode. Each `IConcurrent` entity carries a version token; EF includes it in WHERE clauses on UPDATE; conflicts surface as HTTP 409 instead of silent data loss.
+
+### Mark an entity as concurrent
+
+Two interfaces — pick one per entity:
+
+```csharp
+// Cross-provider: needs a RowVersion column (EF migration creates it)
+public class Lobby : VEntity<Guid, Guid, Guid>, IConcurrent
+{
+    public string Name { get; set; } = null!;
+    public int MaxMembers { get; set; }
+    public byte[] RowVersion { get; set; } = [];   // configured via IsRowVersion automatically
+}
+
+// Postgres-native: uses the built-in xmin system column (no migration needed)
+public class Lobby : VEntity<Guid, Guid, Guid>, IConcurrentXmin
+{
+    public string Name { get; set; } = null!;
+    public int MaxMembers { get; set; }
+    public uint Xmin { get; set; }   // mapped to xmin (xid type), Postgres maintains it
+}
+```
+
+Both work the same way at the API surface — choice is about whether you want a separate column or use Postgres's built-in.
+
+### What happens on conflict
+
+- `SaveChanges` throws `DbUpdateConcurrencyException`
+- `ConcurrencyConflictInterceptor` catches it just before it would propagate
+- All registered `IConcurrencyConflictObserver`s are notified
+- A `ConflictError` is thrown with metadata `{ kind: "concurrent_update", entityType: "Lobby", entityId: "..." }`
+- `VExceptionMiddleware` maps it to HTTP 409 with the standard error envelope
+
+The frontend can branch on `err.error.metadata.kind === "concurrent_update"` to surface "this was changed by someone else, reload?"
+
+### Wire it up
+
+```csharp
+services.AddVAppCoreConcurrency(o =>
+{
+    o.LogConflicts = true;   // logs every conflict at Warning via ILogger
+});
+
+services.AddDbContext<AppDbContext>((sp, options) =>
+{
+    options.UseNpgsql(connStr);
+    options.UseVAppCore<AppDbContext, Guid, Guid>(sp);
+    options.AddInterceptors(sp.GetRequiredService<ConcurrencyConflictInterceptor>());
+});
+```
+
+### Custom observers (metrics, OpenTelemetry, alerts)
+
+Register your own observer in DI before `AddVAppCoreConcurrency()` — it's called alongside the built-in observers:
+
+```csharp
+public class PrometheusConflictObserver : IConcurrencyConflictObserver
+{
+    private readonly Counter _conflictCounter;
+    public PrometheusConflictObserver(Counter c) => _conflictCounter = c;
+
+    public void OnConflict(ConcurrencyConflictDetails details)
+    {
+        _conflictCounter.WithLabels(details.EntityType.Name).Inc();
+    }
+}
+
+services.AddSingleton<IConcurrencyConflictObserver, PrometheusConflictObserver>();
+services.AddVAppCoreConcurrency(o => o.LogConflicts = true);  // logging + metrics both run
+```
+
+### Auto-retry helper
+
+For idempotent read-modify-save patterns (counter increments, score updates), retry-on-conflict is exactly the right pattern:
+
+```csharp
+await Db.RetryOnConflictAsync(async () =>
+{
+    var user = await Set.FindAsync(userId);
+    user.Score += delta;
+    await SaveAsync();
+});
+```
+
+If the save throws `ConflictError`, the helper clears the change tracker and re-runs the operation (which re-reads fresh data). Defaults to 3 attempts; throws the last `ConflictError` if all fail. Optional `onRetry` callback for logging.
+
+### Force-overwrite helper
+
+For admin overrides or recovery flows where "I know what I'm doing, last write wins":
+
+```csharp
+await Db.SaveChangesIgnoreConcurrencyAsync();
+```
+
+Re-reads OriginalValues from the DB on conflict so the next save sees no mismatch. Effectively client-wins. Use sparingly — bypassing concurrency control is usually a bug, not a feature.
+
+---
+
+## Rate Limiting
+
+Caps how many requests a client can make per time window — protects auth endpoints from credential-stuffing, public APIs from scraping, expensive endpoints from resource exhaustion. Built on top of .NET's primitives but with VAppCore-shaped conventions: per-user partitioning via `ICurrentUser`, the standard error envelope on rejection, observable hooks, default policy presets, and a Redis backend for multi-instance deployments.
+
+### Wire it up
+
+```csharp
+services.AddVAppCoreRateLimiting(o =>
+{
+    o.LogRejections = true;          // log every 429 at Warning
+    o.TierMultipliers["paid"] = 10;   // paid users get 10x the default limits
+    o.TierMultipliers["admin"] = double.MaxValue;
+    // o.Policies["vauth"] = new RateLimitPolicy("vauth", Capacity: 5, RefillTokensPerSecond: 5.0/60); // default
+});
+
+app.UseRouting();
+app.UseVRateLimiting();   // must be AFTER UseRouting, BEFORE UseEndpoints/MapControllers
+app.MapControllers();
+```
+
+### Apply to endpoints
+
+```csharp
+[HttpPost, VRateLimit(VAppCoreRateLimitPolicies.Auth)]
+public Task<IActionResult> Login(LoginDto dto) { ... }
+
+[HttpPost, VRateLimit(VAppCoreRateLimitPolicies.Mutation, Cost = 5)]
+public Task<IActionResult> CreateLobby(CreateLobbyDto dto) { ... }   // 5x weight
+
+[HttpGet, VRateLimit(VAppCoreRateLimitPolicies.Read)]
+public Task<IActionResult> ListProducts() { ... }
+```
+
+Endpoints without `[VRateLimit]` are not rate-limited.
+
+### Default policies
+
+| Constant | Limit | Intended for |
+|---|---|---|
+| `VAppCoreRateLimitPolicies.Auth` | 5 / min | login, register, forgot-password, verify-email |
+| `VAppCoreRateLimitPolicies.Mutation` | 60 / min | POST/PUT/DELETE on user-owned data |
+| `VAppCoreRateLimitPolicies.Read` | 300 / min | GET endpoints |
+
+Override any of them or add new ones via `o.Policies["my-policy"] = new RateLimitPolicy(...)`.
+
+### Per-user partitioning
+
+The default `IRateLimitPartitioner`:
+- If the request is authenticated, partitions on `user-{userId}` — limits enforced per user
+- Else partitions on `ip-{remoteIp}` — limits enforced per anonymous IP
+
+Override by registering your own `IRateLimitPartitioner` (per-tenant, per-API-key, etc).
+
+### Per-tier multipliers
+
+`TierMultipliers` keyed by role name. Each request, the user's roles are checked; the highest multiplier matched is applied to the policy's capacity AND refill rate. Example: with `["paid"] = 10`, a "paid" user on the `mutation` policy effectively gets 600/min (60 × 10) instead of 60/min. `double.MaxValue` means no limit.
+
+### Rejection response
+
+When the limit is hit:
+- HTTP 429
+- `Retry-After` header populated with seconds until next refill
+- Body is the standard error envelope:
+  ```json
+  {
+    "title": "Rate Limited",
+    "titleKey": "server.errors.rateLimited",
+    "error": {
+      "message": "Rate limit exceeded for policy 'vauth'.",
+      "messageKey": "server.errors.rateLimited",
+      "metadata": {
+        "kind": "rate_limited",
+        "policy": "vauth",
+        "retryAfterSeconds": 12.4
+      }
+    }
+  }
+  ```
+
+Frontend can branch on `err.error.metadata.kind === "rate_limited"`.
+
+### Observers (metrics, alerts)
+
+Same pattern as concurrency observers:
+
+```csharp
+public class PrometheusRateLimitObserver : IRateLimitObserver
+{
+    private readonly Counter _rejectionCounter;
+    public PrometheusRateLimitObserver(Counter c) => _rejectionCounter = c;
+
+    public void OnRejected(RateLimitRejection r)
+    {
+        _rejectionCounter.WithLabels(r.PolicyName, r.RoutePath ?? "").Inc();
+    }
+}
+
+services.AddSingleton<IRateLimitObserver, PrometheusRateLimitObserver>();
+services.AddVAppCoreRateLimiting(o => o.LogRejections = true);  // logging + metrics both run
+```
+
+### Programmatic checks
+
+For "should I let the user start this expensive operation" UX flows where you want to gate work BEFORE doing it (and BEFORE consuming a token):
+
+```csharp
+public class LobbyController(RateLimitChecker rl, LobbyService lobbies) : ControllerBase
+{
+    [HttpGet("can-create")]
+    public async Task<IActionResult> CanCreateLobby()
+    {
+        var check = await rl.CheckAsync("mutation", cost: 5);
+        return Ok(new { canCreate = check.Permitted, retryAfter = check.RetryAfter });
+    }
+
+    [HttpPost, VRateLimit("mutation", Cost = 5)]
+    public Task<IActionResult> CreateLobby(...) { ... }   // actual rate limit enforced here
+}
+```
+
+`CheckAsync` is non-mutating (advisory). `ConsumeAsync` actually decrements — use that when you want to gate work programmatically without an attribute.
+
+### Distributed (Redis) — opt-in
+
+The default `MemoryRateLimitStore` is per-process. With multiple app instances, each holds its own counter — your effective limit becomes `N_instances × per-instance limit`. For real protection at horizontal scale, swap in the Redis store from the `VAppCore.RateLimiting.Redis` sub-package:
+
+```csharp
+services.AddVAppCoreRateLimiting(o => { ... });
+services.AddVAppCoreRateLimitingRedis("localhost:6379");   // replaces in-memory store
+```
+
+The Redis store uses an atomic Lua script for the token-bucket decrement (single round-trip, no lock contention). Buckets auto-expire after enough idle time to fully refill, so unused partitions don't accumulate forever.
+
+### Cost-weighted limits
+
+The `Cost` property on `[VRateLimit]` decrements N tokens per request instead of 1. Useful when one policy's bucket covers multiple endpoint types with different "weights":
+
+```csharp
+[VRateLimit("mutation")]                 public Task PostScore(...);    // costs 1
+[VRateLimit("mutation", Cost = 5)]       public Task CreateLobby(...);  // costs 5
+[VRateLimit("mutation", Cost = 10)]      public Task UploadAvatar(...); // costs 10
+```
+
+A user with capacity=60 gets 60 PostScore-equivalents, or 12 CreateLobbies, or 6 avatar uploads — they share the same bucket.
 
 ---
 
@@ -1159,14 +1694,13 @@ public class Product : AppEntity, ISoftDeletable
 ### DbContext
 
 ```csharp
-public class AppDbContext : VDbContext<Guid, Guid, Guid>
+public class AppDbContext : DbContext
 {
     public DbSet<Product> Products => Set<Product>();
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<Order> Orders => Set<Order>();
 
-    public AppDbContext(DbContextOptions<AppDbContext> options, IServiceProvider sp)
-        : base(options, sp) { }
+    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 }
 ```
 
@@ -1318,11 +1852,14 @@ public class ProductController(ProductService products) : ControllerBase
 ```csharp
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddDbContext<AppDbContext>(o =>
-    o.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
+builder.Services.AddDbContext<AppDbContext>((sp, options) =>
+{
+    options.UseNpgsql(builder.Configuration.GetConnectionString("Default"));
+    options.UseVAppCore<AppDbContext, Guid, Guid>(sp);
+});
 
 builder.Services.AddControllers();
-builder.Services.AddVAppCore<AppDbContext>();
+builder.Services.AddVAppCore<AppDbContext, Guid, Guid>();
 builder.Services.AddVServices(typeof(Program).Assembly);
 
 var app = builder.Build();
@@ -1338,8 +1875,8 @@ app.Run();
 ### Example Requests
 
 ```bash
-# List with filtering, sorting, pagination, field selection
-GET /api/products?filter=price=gt=100;name=like=*Phone*&sort=-price&select=id,name,price,orderCount&page=1&size=10
+# List with filtering, sorting, cursor pagination, field selection
+GET /api/products?filter=price=gt=100;name=like=*Phone*&sort=-price&select=id,name,price,orderCount&limit=10
 
 # Get detail
 GET /api/products/abc-123

@@ -66,12 +66,12 @@ public class VAuthorizeAttributeTests
     }
 }
 
-public class VAppCoreAuthOptionsTests
+public class VAppCoreOptionsTests
 {
     [Fact]
     public void DefaultOptions_HaveSensibleDefaults()
     {
-        var options = new VAppCoreAuthOptions();
+        var options = new VAppCoreOptions();
 
         Assert.Equal("sub", options.UserIdClaim);
         Assert.Equal("tenant_id", options.TenantIdClaim);

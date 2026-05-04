@@ -15,14 +15,14 @@ public class ClaimsCurrentUser<TUserKey, TTenantKey> : ICurrentUser<TUserKey, TT
     where TTenantKey : IEquatable<TTenantKey>
 {
     private readonly IHttpContextAccessor _http;
-    private readonly VAppCoreAuthOptions _options;
+    private readonly VAppCoreOptions _options;
     private readonly IServiceProvider _sp;
     private IReadOnlyList<string>? _roles;
     private IReadOnlyList<string>? _permissions;
 
     public ClaimsCurrentUser(
         IHttpContextAccessor http,
-        IOptions<VAppCoreAuthOptions> options,
+        IOptions<VAppCoreOptions> options,
         IServiceProvider sp)
     {
         _http = http;

@@ -2,8 +2,9 @@ namespace VAppCore;
 
 /// <summary>
 /// Opt-in interface for multi-tenancy. Entities implementing this are
-/// automatically scoped by TenantId — VDbContext applies a global query
-/// filter and auto-sets TenantId on new entities from CurrentUser.
+/// automatically scoped by TenantId — ApplyVAppCoreFilters applies a global query
+/// filter (when the DbContext implements IVTenantContext) and VAuditInterceptor
+/// auto-sets TenantId on new entities from CurrentUser.
 /// </summary>
 public interface ITenantScoped<TTenantKey>
 {

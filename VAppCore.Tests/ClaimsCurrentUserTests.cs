@@ -10,7 +10,7 @@ public class ClaimsCurrentUserTests
     private static ClaimsCurrentUser<Guid, Guid> CreateUser(
         IEnumerable<Claim>? claims = null,
         bool authenticated = true,
-        VAppCoreAuthOptions? options = null,
+        VAppCoreOptions? options = null,
         IPermissionResolver<Guid>? resolver = null)
     {
         var identity = authenticated
@@ -23,7 +23,7 @@ public class ClaimsCurrentUserTests
         };
 
         var accessor = new HttpContextAccessor { HttpContext = httpContext };
-        var opts = Options.Create(options ?? new VAppCoreAuthOptions());
+        var opts = Options.Create(options ?? new VAppCoreOptions());
 
         var services = new ServiceCollection();
         if (resolver != null)
@@ -84,7 +84,7 @@ public class ClaimsCurrentUserTests
         var tenantId = Guid.NewGuid();
         var user = CreateUser(
             [new Claim("org_id", tenantId.ToString())],
-            options: new VAppCoreAuthOptions { TenantIdClaim = "org_id" });
+            options: new VAppCoreOptions { TenantIdClaim = "org_id" });
 
         Assert.Equal(tenantId, user.TenantId);
     }
@@ -167,7 +167,7 @@ public class ClaimsCurrentUserTests
                 new Claim("scope", "read"),
                 new Claim("scope", "write")
             ],
-            options: new VAppCoreAuthOptions
+            options: new VAppCoreOptions
             {
                 UserIdClaim = "user_id",
                 RoleClaim = "custom_role",

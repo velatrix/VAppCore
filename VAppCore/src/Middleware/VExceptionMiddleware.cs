@@ -31,6 +31,11 @@ public class VExceptionMiddleware
         {
             context.Response.StatusCode = ex.StatusCode;
             context.Response.ContentType = "application/json";
+            if (ex is RateLimitedError rateLimited && rateLimited.RetryAfter is { } retryAfter
+                && !context.Response.Headers.ContainsKey("Retry-After"))
+            {
+                context.Response.Headers["Retry-After"] = ((int)Math.Ceiling(retryAfter.TotalSeconds)).ToString();
+            }
             await context.Response.WriteAsync(JsonSerializer.Serialize(ex.Context, JsonOptions));
         }
         catch (Exception ex)

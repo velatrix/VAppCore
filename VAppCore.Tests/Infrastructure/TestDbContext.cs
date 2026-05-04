@@ -25,15 +25,49 @@ public class TestSimpleEntity : VEntity<Guid, Guid, Guid>
     public string Name { get; set; } = string.Empty;
 }
 
-// ── Test DbContext ──
+public class TestNullableEntity : VEntity<Guid, Guid, Guid>
+{
+    public string? OptionalName { get; set; }
+    public int? OptionalScore { get; set; }
+}
 
-public class TestDbContext : VDbContext<Guid, Guid, Guid>
+public class TestConcurrentEntity : VEntity<Guid, Guid, Guid>, IConcurrent
+{
+    public string Name { get; set; } = string.Empty;
+    public byte[] RowVersion { get; set; } = [];
+}
+
+public class TestConcurrentXminEntity : VEntity<Guid, Guid, Guid>, IConcurrentXmin
+{
+    public string Name { get; set; } = string.Empty;
+    public uint Xmin { get; set; }
+}
+
+// ── Test DbContext (plain DbContext — v2 wires VAppCore at options level) ──
+
+public class TestDbContext : DbContext
 {
     public DbSet<TestProduct> Products => Set<TestProduct>();
     public DbSet<TestTenantProduct> TenantProducts => Set<TestTenantProduct>();
     public DbSet<TestSimpleEntity> SimpleEntities => Set<TestSimpleEntity>();
+    public DbSet<TestNullableEntity> NullableEntities => Set<TestNullableEntity>();
+    public DbSet<TestConcurrentEntity> ConcurrentEntities => Set<TestConcurrentEntity>();
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
 
-    public TestDbContext(DbContextOptions options, IServiceProvider sp) : base(options, sp) { }
+    public TestDbContext(DbContextOptions options) : base(options) { }
+}
+
+// Vanilla alias — kept for tests that explicitly need to assert the "no VAppCore wiring" baseline.
+public class VanillaDbContext : DbContext
+{
+    public DbSet<TestProduct> Products => Set<TestProduct>();
+    public DbSet<TestTenantProduct> TenantProducts => Set<TestTenantProduct>();
+    public DbSet<TestSimpleEntity> SimpleEntities => Set<TestSimpleEntity>();
+    public DbSet<TestNullableEntity> NullableEntities => Set<TestNullableEntity>();
+    public DbSet<TestConcurrentEntity> ConcurrentEntities => Set<TestConcurrentEntity>();
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+
+    public VanillaDbContext(DbContextOptions options) : base(options) { }
 }
 
 // ── Test CurrentUser ──
@@ -57,34 +91,62 @@ public static class TestFactory
     public static (TestDbContext Db, TestCurrentUser User) CreateDbContext()
     {
         var user = new TestCurrentUser();
-
-        var services = new ServiceCollection();
-        services.AddSingleton<ICurrentUser<Guid, Guid>>(user);
-        services.AddSingleton<ICurrentUser>(user);
-        var sp = services.BuildServiceProvider();
+        var sp = BuildServiceProvider(user);
 
         var options = new DbContextOptionsBuilder<TestDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .UseVAppCore<TestDbContext, Guid, Guid>(sp)
             .Options;
 
-        var db = new TestDbContext(options, sp);
-        return (db, user);
+        return (new TestDbContext(options), user);
     }
 
     public static (TestDbContext Db, TestCurrentUser User) CreateDbContextUnauthenticated()
     {
         var user = new TestCurrentUser { IsAuthenticated = false };
-
-        var services = new ServiceCollection();
-        services.AddSingleton<ICurrentUser<Guid, Guid>>(user);
-        services.AddSingleton<ICurrentUser>(user);
-        var sp = services.BuildServiceProvider();
+        var sp = BuildServiceProvider(user);
 
         var options = new DbContextOptionsBuilder<TestDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .UseVAppCore<TestDbContext, Guid, Guid>(sp)
             .Options;
 
-        var db = new TestDbContext(options, sp);
+        return (new TestDbContext(options), user);
+    }
+
+    public static (VanillaDbContext Db, TestCurrentUser User) CreateVanillaDbContext()
+    {
+        var user = new TestCurrentUser();
+        var interceptor = new VAuditInterceptor<Guid, Guid>(user);
+
+        var options = new DbContextOptionsBuilder<VanillaDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .AddInterceptors(interceptor)
+            .Options;
+
+        var db = new VanillaDbContext(options);
         return (db, user);
+    }
+
+    public static (VanillaDbContext Db, TestCurrentUser User) CreateVanillaDbContextUnauthenticated()
+    {
+        var user = new TestCurrentUser { IsAuthenticated = false };
+        var interceptor = new VAuditInterceptor<Guid, Guid>(user);
+
+        var options = new DbContextOptionsBuilder<VanillaDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .AddInterceptors(interceptor)
+            .Options;
+
+        var db = new VanillaDbContext(options);
+        return (db, user);
+    }
+
+    private static IServiceProvider BuildServiceProvider(TestCurrentUser user)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ICurrentUser<Guid, Guid>>(user);
+        services.AddSingleton<ICurrentUser>(user);
+        return services.BuildServiceProvider();
     }
 }

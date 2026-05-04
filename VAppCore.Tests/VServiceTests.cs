@@ -113,13 +113,13 @@ public class VServiceTests
 
         // Normal query should not find it (query filter)
         var filtered = await svc.Db.Set<TestProduct>()
-            .FirstOrDefaultAsync(p => p.Id == product.Id);
+            .FirstOrDefaultAsync(p => p.Id == product.Id, TestContext.Current.CancellationToken);
         Assert.Null(filtered);
 
         // IgnoreQueryFilters should find it as soft-deleted
         var raw = await svc.Db.Set<TestProduct>()
             .IgnoreQueryFilters()
-            .FirstOrDefaultAsync(p => p.Id == product.Id);
+            .FirstOrDefaultAsync(p => p.Id == product.Id, TestContext.Current.CancellationToken);
         Assert.NotNull(raw);
         Assert.True(raw.IsDeleted);
     }
@@ -147,7 +147,7 @@ public class VServiceTests
             new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>
             {
                 ["page"] = "1",
-                ["size"] = "5"
+                ["limit"] = "5"
             });
 
         // Use ApplyWithCountAsync directly since GetPagedAsync uses projection
@@ -195,7 +195,7 @@ public class VServiceTests
         var svc = CreateService();
 
         var product = await svc.Create("Saved", 50m);
-        var found = await svc.Db.Set<TestProduct>().FindAsync(product.Id);
+        var found = await svc.Db.Set<TestProduct>().FindAsync([product.Id], TestContext.Current.CancellationToken);
 
         Assert.NotNull(found);
         Assert.Equal("Saved", found.Name);

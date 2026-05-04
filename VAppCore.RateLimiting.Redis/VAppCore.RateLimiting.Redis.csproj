@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>VAppCore</RootNamespace>
+    <PackageId>VAppCore.RateLimiting.Redis</PackageId>
+    <Version>2.0.6</Version>
+    <Description>Redis-backed distributed rate limit store for VAppCore. Drop-in replacement for the in-memory store; required for multi-instance deployments where per-process counters would let actual rates exceed the configured limits.</Description>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VAppCore\VAppCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="StackExchange.Redis" Version="2.12.14" />
+  </ItemGroup>
+
+</Project>

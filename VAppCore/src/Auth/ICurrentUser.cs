@@ -13,7 +13,7 @@ public interface ICurrentUser
 
 /// <summary>
 /// Generic interface with typed user and tenant keys.
-/// Used by VDbContext and VService for audit fields and tenant scoping.
+/// Used by VAuditInterceptor and VService for audit fields and tenant scoping.
 /// </summary>
 public interface ICurrentUser<TUserKey, TTenantKey> : ICurrentUser
     where TUserKey : IEquatable<TUserKey>
