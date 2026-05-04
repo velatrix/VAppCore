@@ -33,6 +33,7 @@ public class ClaimsCurrentUser<TUserKey, TTenantKey> : ICurrentUser<TUserKey, TT
     private ClaimsPrincipal? User => _http.HttpContext?.User;
 
     public bool IsAuthenticated => User?.Identity?.IsAuthenticated ?? false;
+    public string? AuthenticationType => User?.Identity?.AuthenticationType;
 
     public TUserKey UserId
     {

@@ -107,6 +107,7 @@ public class VanillaDbContext : DbContext
 public class TestCurrentUser : ICurrentUser<Guid, Guid>
 {
     public bool IsAuthenticated { get; set; } = true;
+    public string? AuthenticationType { get; set; } = "TestAuth";
     public Guid UserId { get; set; } = Guid.NewGuid();
     public Guid TenantId { get; set; } = Guid.NewGuid();
     public string? Email { get; set; } = "test@test.com";

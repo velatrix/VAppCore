@@ -33,6 +33,25 @@ public class VAuthorizeFilter : IAsyncActionFilter
 
         foreach (var attr in attributes)
         {
+            if (attr.ApiKey is not null)
+            {
+                if (currentUser.AuthenticationType != ApiKeyAuthenticationHandler.SchemeName)
+                    throw new ForbiddenError(new ErrorObject
+                    {
+                        Message = "API key authentication required",
+                        MessageKey = "api_key.required",
+                        Metadata = new { permission = attr.ApiKey }
+                    });
+                if (!currentUser.HasPermission(attr.ApiKey))
+                    throw new ForbiddenError(new ErrorObject
+                    {
+                        Message = $"Required permission: {attr.ApiKey}",
+                        MessageKey = "permission.required",
+                        Metadata = new { permission = attr.ApiKey }
+                    });
+                continue;
+            }
+
             if (attr.Role is not null && !currentUser.IsInRole(attr.Role))
                 throw new ForbiddenError(new ErrorObject
                 {

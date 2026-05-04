@@ -7,6 +7,14 @@ namespace VAppCore;
 public interface ICurrentUser
 {
     bool IsAuthenticated { get; }
+
+    /// <summary>
+    /// The authentication scheme that produced this principal (e.g. <c>"Cookies"</c>, <c>"ApiKey"</c>).
+    /// Null for unauthenticated callers. Used by <see cref="VAuthorizeAttribute.ApiKey"/> to require
+    /// the caller is the API key scheme.
+    /// </summary>
+    string? AuthenticationType { get; }
+
     bool IsInRole(string role);
     bool HasPermission(string permission);
 }
