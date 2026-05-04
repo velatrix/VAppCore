@@ -17,8 +17,11 @@ public static class AuditLogDbContextOptionsExtensions
         where TUserKey : IEquatable<TUserKey>
         where TTenantKey : IEquatable<TTenantKey>
     {
-        var currentUser = serviceProvider.GetService<ICurrentUser<TUserKey, TTenantKey>>();
-        builder.AddInterceptors(new AuditLogInterceptor<TUserKey, TTenantKey>(currentUser));
+        // Resolve from DI (registered as Scoped by AddVAppCoreAuditLog) so the interceptor
+        // shares lifetime + ICurrentUser with the per-request scope. The (sp, opts) form of
+        // AddDbContext gives us the per-scope provider here.
+        var interceptor = serviceProvider.GetRequiredService<AuditLogInterceptor<TUserKey, TTenantKey>>();
+        builder.AddInterceptors(interceptor);
         return builder;
     }
 

@@ -1218,6 +1218,8 @@ services.AddDbContext<HubDbContext>((sp, opts) =>
 });
 ```
 
+> **Order matters:** `UseVAppCore` must appear before `AddVAppCoreAuditInterceptors`. The audit interceptor reads entry state that `VAuditInterceptor` has already transformed (e.g. `ISoftDeletable` Deleted → Modified + IsDeleted=true). Swap the order and soft deletes record as `Action=Modify` with an `isDeleted` flip instead of `Action=Delete`.
+
 Add `DbSet<AuditLog>` to your DbContext and create an EF migration. The interceptor throws a clear `InvalidOperationException` on the first save if you forget the DbSet.
 
 ### Mark entities to track
@@ -1275,6 +1277,11 @@ using (audit.Suppress())
 ### Default-skipped fields
 
 The diff never includes audit/concurrency/soft-delete metadata: `CreatedAt`, `UpdatedAt`, `CreatedBy`, `UpdatedBy`, `RowVersion`, `Xmin`, `IsDeleted`, `DeletedAt`, `DeletedBy`. Soft-deletes are recorded with `Action = Delete` (not as an `IsDeleted` field flip). Mark additional fields with `[NotAudited]` to keep noisy fields out of the diff.
+
+### Caveats
+
+- **Owned entities** (`OwnsOne` / `OwnsMany`) are not included in the parent entity's diff. EF tracks them as separate change-tracker entries. To audit changes inside an owned type, mark the owned class itself with `IAuditedEntity`.
+- **Lazy-loading proxies**: if you enable `UseLazyLoadingProxies()`, `EntityType` is recorded as the proxy type name (e.g. `LobbyProxy`) rather than the entity type name. `GetHistoryAsync<Lobby>(id)` will not find rows written via the proxy. Either avoid lazy-loading proxies on `IAuditedEntity` types or query by raw entity-type name.
 
 ---
 

@@ -233,4 +233,31 @@ public class AuditLogInterceptorTests
         Assert.Null(row.ChangedBy);
         Assert.Equal(AuditAction.Add, row.Action);
     }
+
+    [Fact]
+    public async Task SaveChanges_WithoutAuditLogDbSet_ThrowsInvalidOperationException()
+    {
+        // Build a DbContext that has IAuditedEntity but NO DbSet<AuditLog>.
+        // The interceptor should fail fast with a clear message.
+        var user = new TestCurrentUser();
+        var auditInterceptor = new AuditLogInterceptor<Guid, Guid>(user);
+
+        var options = new DbContextOptionsBuilder<MissingAuditDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .AddInterceptors(auditInterceptor)
+            .Options;
+
+        await using var db = new MissingAuditDbContext(options);
+        db.AuditedEntities.Add(new TestAuditedEntity { Id = Guid.NewGuid(), Name = "x" });
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => db.SaveChangesAsync(TestContext.Current.CancellationToken));
+        Assert.Contains("DbSet<AuditLog>", ex.Message);
+    }
+
+    // DbContext without DbSet<AuditLog> — used only by the test above.
+    private sealed class MissingAuditDbContext(DbContextOptions options) : DbContext(options)
+    {
+        public DbSet<TestAuditedEntity> AuditedEntities => Set<TestAuditedEntity>();
+    }
 }
