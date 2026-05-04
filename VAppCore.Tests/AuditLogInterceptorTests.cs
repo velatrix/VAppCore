@@ -219,4 +219,18 @@ public class AuditLogInterceptorTests
 
         Assert.Single(await db.AuditLogs.ToListAsync(TestContext.Current.CancellationToken));
     }
+
+    [Fact]
+    public async Task Add_Unauthenticated_AuditRow_HasNullChangedBy()
+    {
+        var (db, _) = TestFactory.CreateAuditLogDbContext(authenticated: false);
+
+        var entity = new TestAuditedEntity { Id = Guid.NewGuid(), Name = "Anon" };
+        db.AuditedEntities.Add(entity);
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var row = await db.AuditLogs.SingleAsync(TestContext.Current.CancellationToken);
+        Assert.Null(row.ChangedBy);
+        Assert.Equal(AuditAction.Add, row.Action);
+    }
 }
