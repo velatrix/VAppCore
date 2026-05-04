@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.EntityFrameworkCore;
 
@@ -15,9 +16,11 @@ public class AuditLog
     public Guid Id { get; set; } = Guid.NewGuid();
 
     /// <summary>CLR type name of the audited entity (e.g. "Lobby"). Not assembly-qualified.</summary>
+    [MaxLength(200)]
     public string EntityType { get; set; } = string.Empty;
 
     /// <summary>Primary key of the audited entity, serialized via <c>ToString()</c>.</summary>
+    [MaxLength(500)]
     public string EntityId { get; set; } = string.Empty;
 
     public AuditAction Action { get; set; }
