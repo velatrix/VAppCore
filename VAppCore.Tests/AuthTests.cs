@@ -57,6 +57,15 @@ public class VAuthorizeAttributeTests
         Assert.Single(attrs);
     }
 
+    [Fact]
+    public void Attribute_WithApiKey()
+    {
+        var attr = new VAuthorizeAttribute { ApiKey = "matches.report" };
+        Assert.Equal("matches.report", attr.ApiKey);
+        Assert.Null(attr.Permission);
+        Assert.Null(attr.Role);
+    }
+
     [VAuthorize]
     private class TestController
     {
