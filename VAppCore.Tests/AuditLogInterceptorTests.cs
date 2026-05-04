@@ -198,4 +198,25 @@ public class AuditLogInterceptorTests
                         TestContext.Current.CancellationToken);
         Assert.Equal(0, modifyCount);
     }
+
+    [Fact]
+    public async Task Suppression_SkipsAuditRowsWithinScope()
+    {
+        var (db, _) = TestFactory.CreateAuditLogDbContext();
+
+        using (AuditSuppression.Suppress())
+        {
+            var entity = new TestAuditedEntity { Id = Guid.NewGuid(), Name = "Bulk" };
+            db.AuditedEntities.Add(entity);
+            await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        Assert.Empty(await db.AuditLogs.ToListAsync(TestContext.Current.CancellationToken));
+
+        var resumed = new TestAuditedEntity { Id = Guid.NewGuid(), Name = "Tracked" };
+        db.AuditedEntities.Add(resumed);
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        Assert.Single(await db.AuditLogs.ToListAsync(TestContext.Current.CancellationToken));
+    }
 }
