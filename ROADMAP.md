@@ -148,7 +148,7 @@ Once 1.1.0 ships, Hub does:
 
 ---
 
-## v1.8.0 — Service-to-service / API key auth
+## ~~v1.8.0 — Service-to-service / API key auth~~ (shipped 2026-05-05)
 
 **Problem:** When `Core` (the actual game-server library) eventually reports match results back to Hub, you need machine auth — not user cookies.
 

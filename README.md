@@ -13,6 +13,7 @@ Enterprise .NET 10 library for building web APIs. Provides base entities with au
 - [VQueryFilter](#vqueryfilter)
 - [Domain Events + Outbox](#domain-events--outbox)
 - [Audit Log](#audit-log)
+- [API Key Auth](#api-key-auth)
 - [Optimistic Concurrency](#optimistic-concurrency)
 - [Rate Limiting](#rate-limiting)
 - [Error Handling](#error-handling)
@@ -1282,6 +1283,79 @@ The diff never includes audit/concurrency/soft-delete metadata: `CreatedAt`, `Up
 
 - **Owned entities** (`OwnsOne` / `OwnsMany`) are not included in the parent entity's diff. EF tracks them as separate change-tracker entries. To audit changes inside an owned type, mark the owned class itself with `IAuditedEntity`.
 - **Lazy-loading proxies**: if you enable `UseLazyLoadingProxies()`, `EntityType` is recorded as the proxy type name (e.g. `LobbyProxy`) rather than the entity type name. `GetHistoryAsync<Lobby>(id)` will not find rows written via the proxy. Either avoid lazy-loading proxies on `IAuditedEntity` types or query by raw entity-type name.
+
+---
+
+## API Key Auth
+
+Service-to-service authentication via `X-Api-Key` header. Issue scoped, revocable, expiring keys to machine callers (game servers, bots, integrations) without minting user JWTs.
+
+### Setup
+
+```csharp
+// Program.cs
+services.AddVApiKeyAuth<HubDbContext>();    // registers IApiKeyService
+
+services.AddAuthentication()
+    .AddCookie()                                // existing user auth
+    .AddVApiKey();                              // new scheme: reads X-Api-Key
+```
+
+Add `DbSet<ApiKey>` to your DbContext and create an EF migration. `ApiKey` implements `IAuditedEntity` — pair with v1.7 audit log to record every create/revoke/rotate.
+
+### Create a key (admin endpoint)
+
+```csharp
+[HttpPost("/api/admin/api-keys")]
+[VAuthorize(Permission = "admin.api-keys.manage")]   // user permission
+public async Task<CreateApiKeyResponse> Create(IApiKeyService keys, CreateApiKeyRequest req)
+{
+    var (key, plaintext) = await keys.CreateAsync(
+        name: req.Name,                             // "core-game-server-prod"
+        permissions: req.Permissions,               // ["matches.report", "matches.read"]
+        expiresAt: DateTime.UtcNow.AddYears(1));
+
+    return new CreateApiKeyResponse
+    {
+        Id = key.Id,
+        Name = key.Name,
+        Prefix = key.Prefix,
+        Secret = plaintext        // shown ONCE — caller must save now
+    };
+}
+```
+
+### Restrict an endpoint to API key callers
+
+```csharp
+[HttpPost("/api/matches")]
+[VAuthorize(ApiKey = "matches.report")]   // user cookies are REJECTED here
+public Task<IActionResult> Report(MatchResultDto dto) => ...;
+```
+
+### Revoke / rotate
+
+```csharp
+await keys.RevokeAsync(keyId);                         // next request → 401
+var (newKey, newSecret) = await keys.RotateAsync(id);  // revoke old, create new with same name+permissions
+```
+
+### Failure modes
+
+| Situation | Response |
+|---|---|
+| Missing `X-Api-Key` (with `[VAuthorize(ApiKey=...)]`) | 401 `unauthenticated` |
+| Unknown / revoked / expired key | 401 `api_key.invalid` / `api_key.revoked` / `api_key.expired` |
+| User cookie on `[VAuthorize(ApiKey=...)]` endpoint | 403 `api_key.required` |
+| ApiKey valid but missing permission | 403 `permission.required` |
+
+### Notes
+
+- Plaintext format: `vk_live_<43 base64-url chars>` (32 random bytes / 256 bits entropy).
+- Storage: SHA-256 hex of the full plaintext. The plaintext is shown ONCE on create/rotate and never persisted. The `Prefix` field stores the first 12 chars (e.g. `vk_live_a1b2`) for admin-UI display only.
+- Lookup: `WHERE HashedSecret = @hash` — single indexed query per request.
+- `LastUsedAt` is updated fire-and-forget after successful authentication; failures here never block the request.
+- `IApiKeyService` is usable without the auth scheme (e.g., for an admin tool managing keys without consuming them).
 
 ---
 
