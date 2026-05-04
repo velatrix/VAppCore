@@ -135,4 +135,26 @@ public class AuditLogInterceptorTests
         var rows = await db.AuditLogs.ToListAsync(TestContext.Current.CancellationToken);
         Assert.Empty(rows);
     }
+
+    [Fact]
+    public async Task Modify_Audited_DiffSkipsAuditAndConcurrencyFields()
+    {
+        var (db, _) = TestFactory.CreateAuditLogDbContext();
+        var entity = new TestAuditedEntity { Id = Guid.NewGuid(), Name = "X", Score = 1 };
+        db.AuditedEntities.Add(entity);
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        entity.Name = "Y";
+        await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var modify = await db.AuditLogs
+            .Where(a => a.Action == AuditAction.Modify)
+            .SingleAsync(TestContext.Current.CancellationToken);
+
+        using var doc = JsonDocument.Parse(modify.Changes);
+        Assert.False(doc.RootElement.TryGetProperty("createdAt", out _));
+        Assert.False(doc.RootElement.TryGetProperty("updatedAt", out _));
+        Assert.False(doc.RootElement.TryGetProperty("createdBy", out _));
+        Assert.False(doc.RootElement.TryGetProperty("updatedBy", out _));
+    }
 }
