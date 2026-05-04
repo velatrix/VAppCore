@@ -127,4 +127,114 @@ public class ApiKeyServiceTests
         var (_, svc) = CreateService();
         Assert.Null(await svc.AuthenticateAsync(string.Empty, TestContext.Current.CancellationToken));
     }
+
+    [Fact]
+    public async Task RevokeAsync_FlipsIsActive_AndAuthenticateReturnsNull()
+    {
+        var (_, svc) = CreateService();
+        var (created, plaintext) = await svc.CreateAsync(
+            "k", new[] { "p" }, ct: TestContext.Current.CancellationToken);
+
+        await svc.RevokeAsync(created.Id, TestContext.Current.CancellationToken);
+
+        var fetched = await svc.GetAsync(created.Id, TestContext.Current.CancellationToken);
+        Assert.NotNull(fetched);
+        Assert.False(fetched.IsActive);
+
+        var auth = await svc.AuthenticateAsync(plaintext, TestContext.Current.CancellationToken);
+        Assert.Null(auth);
+    }
+
+    [Fact]
+    public async Task RevokeAsync_UnknownId_DoesNothing()
+    {
+        var (_, svc) = CreateService();
+        await svc.RevokeAsync(Guid.NewGuid(), TestContext.Current.CancellationToken);
+        // No throw expected.
+    }
+
+    [Fact]
+    public async Task GetAsync_ReturnsKey()
+    {
+        var (_, svc) = CreateService();
+        var (created, _) = await svc.CreateAsync("k", new[] { "p" }, ct: TestContext.Current.CancellationToken);
+
+        var fetched = await svc.GetAsync(created.Id, TestContext.Current.CancellationToken);
+        Assert.NotNull(fetched);
+        Assert.Equal(created.Id, fetched.Id);
+    }
+
+    [Fact]
+    public async Task GetAsync_UnknownId_ReturnsNull()
+    {
+        var (_, svc) = CreateService();
+        Assert.Null(await svc.GetAsync(Guid.NewGuid(), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task ListAsync_DefaultsExcludeInactive()
+    {
+        var (_, svc) = CreateService();
+        var (active, _) = await svc.CreateAsync("active", new[] { "p" }, ct: TestContext.Current.CancellationToken);
+        var (inactive, _) = await svc.CreateAsync("inactive", new[] { "p" }, ct: TestContext.Current.CancellationToken);
+        await svc.RevokeAsync(inactive.Id, TestContext.Current.CancellationToken);
+
+        var list = await svc.ListAsync(includeInactive: false, ct: TestContext.Current.CancellationToken);
+        Assert.Single(list);
+        Assert.Equal(active.Id, list[0].Id);
+    }
+
+    [Fact]
+    public async Task ListAsync_IncludeInactiveTrue_ReturnsAll()
+    {
+        var (_, svc) = CreateService();
+        var (active, _) = await svc.CreateAsync("active", new[] { "p" }, ct: TestContext.Current.CancellationToken);
+        var (inactive, _) = await svc.CreateAsync("inactive", new[] { "p" }, ct: TestContext.Current.CancellationToken);
+        await svc.RevokeAsync(inactive.Id, TestContext.Current.CancellationToken);
+
+        var list = await svc.ListAsync(includeInactive: true, ct: TestContext.Current.CancellationToken);
+        Assert.Equal(2, list.Count);
+    }
+
+    [Fact]
+    public async Task RotateAsync_RevokesOld_CreatesNewWithSameNameAndPermissions()
+    {
+        var (_, svc) = CreateService();
+        var (oldKey, oldPlain) = await svc.CreateAsync(
+            "rotate-me",
+            new[] { "matches.report", "matches.read" },
+            ct: TestContext.Current.CancellationToken);
+
+        var (newKey, newPlain) = await svc.RotateAsync(oldKey.Id, TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(oldKey.Id, newKey.Id);
+        Assert.NotEqual(oldPlain, newPlain);
+        Assert.Equal(oldKey.Name, newKey.Name);
+        Assert.Equal(oldKey.Permissions, newKey.Permissions);
+        Assert.True(newKey.IsActive);
+
+        var oldFetched = await svc.GetAsync(oldKey.Id, TestContext.Current.CancellationToken);
+        Assert.False(oldFetched!.IsActive);
+    }
+
+    [Fact]
+    public async Task RotateAsync_UnknownId_ThrowsInvalidOperation()
+    {
+        var (_, svc) = CreateService();
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => svc.RotateAsync(Guid.NewGuid(), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task MarkUsedAsync_UpdatesLastUsedAt()
+    {
+        var (_, svc) = CreateService();
+        var (created, _) = await svc.CreateAsync("k", new[] { "p" }, ct: TestContext.Current.CancellationToken);
+        Assert.Null(created.LastUsedAt);
+
+        await svc.MarkUsedAsync(created.Id, TestContext.Current.CancellationToken);
+
+        var fetched = await svc.GetAsync(created.Id, TestContext.Current.CancellationToken);
+        Assert.NotNull(fetched!.LastUsedAt);
+    }
 }
