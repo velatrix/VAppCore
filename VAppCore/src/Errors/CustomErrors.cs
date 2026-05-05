@@ -131,3 +131,14 @@ public class RateLimitedError : BaseError
         RetryAfter = retryAfter;
     }
 }
+
+public class LockedError : BaseError
+{
+    public LockedError(ErrorObject error)
+        : base(423, new ErrorContext
+        {
+            Title = "Locked",
+            TitleKey = "server.errors.locked",
+            Error = error
+        }) { }
+}

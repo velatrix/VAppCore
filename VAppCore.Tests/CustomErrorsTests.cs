@@ -126,4 +126,14 @@ public class CustomErrorsTests
         Assert.Equal("Conflict Error", error.Context.Title);
         Assert.Equal("server.errors.conflict", error.Context.TitleKey);
     }
+
+    [Fact]
+    public void LockedError_HasCorrectStatusCode()
+    {
+        var error = new LockedError(new ErrorObject { Message = "Account temporarily locked" });
+
+        Assert.Equal(423, error.StatusCode);
+        Assert.Equal("Locked", error.Context.Title);
+        Assert.Equal("server.errors.locked", error.Context.TitleKey);
+    }
 }
