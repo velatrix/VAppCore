@@ -415,7 +415,8 @@ public class VQueryParser
                 Items = [],
                 Page = Page,
                 Limit = Limit,
-                TotalItems = totalCount
+                TotalItems = totalCount,
+                HasMore = Page * Limit < totalCount
             };
         }
 
@@ -429,7 +430,8 @@ public class VQueryParser
             Items = items.Cast<object>().ToList(),
             Page = Page,
             Limit = Limit,
-            TotalItems = totalCount
+            TotalItems = totalCount,
+            HasMore = Page * Limit < totalCount
         };
     }
 

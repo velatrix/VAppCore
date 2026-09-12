@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.2.3 — 2026-09-12
+
+### Fixed
+
+- Page mode now reports `HasMore`. `ApplyWithProjectionAsync` (and therefore `GetPagedAsync` with
+  `?page=N`) left the field at its default, so every page claimed to be the last one while `totalPages`
+  said otherwise. It is now `page * limit < totalItems`, which is what the unified envelope documents.
+
 ## 2.2.2 — 2026-09-12
 
 ### Fixed
