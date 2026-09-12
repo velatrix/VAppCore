@@ -573,7 +573,13 @@ public class VQueryParser
 
             if (subFields.Contains("") || subFields.Count == 0)
             {
-                selectParts.Add($"{rootProperty}.{prop} as {ToCamelCase(group.Key)}");
+                // np() null-propagates the entire access chain, so an optional navigation anywhere
+                // in "it.A.B.C" yields null instead of throwing, and a non-nullable value type at
+                // the leaf is lifted to Nullable<T>. Without it EF materializes the NULL a LEFT JOIN
+                // produces for a missing navigation into a non-nullable property and throws
+                // "Nullable object must have a value". BuildNavigationExpression already guards the
+                // custom-field path with iif(); this is the same guard for declared nested fields.
+                selectParts.Add($"np({rootProperty}.{prop}) as {ToCamelCase(group.Key)}");
             }
             else
             {
