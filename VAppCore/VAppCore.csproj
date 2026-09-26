@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>VAppCore</RootNamespace>
     <PackageId>VAppCore</PackageId>
-    <Version>2.2.3</Version>
+    <Version>3.0.0</Version>
     <Description>Enterprise .NET library — RSQL query parsing, base entities, auth, services, error handling</Description>
     <IsPackable>true</IsPackable>
   </PropertyGroup>

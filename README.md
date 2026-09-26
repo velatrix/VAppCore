@@ -428,11 +428,162 @@ public class PublicController : ControllerBase
 
 - `[VAuthorize]` alone = must be authenticated
 - `[VAuthorize(Permission = "...")]` = needs specific permission
+- `[VAuthorize(AnyOf = new[] { "...", "..." })]` = needs at least one of them
 - `[VAuthorize(Role = "...")]` = needs specific role
 - Multiple `[VAuthorize]` = must satisfy ALL
-- No attribute = public endpoint
+- No attribute = public endpoint; `[AllowAnonymous]` also switches the checks off, as it does for `[Authorize]`
 
-Unauthorized returns `401`, forbidden returns `403` — both in the standard `ErrorContext` format.
+Unauthorized returns `401`, forbidden returns `403` — both in the standard `ErrorContext` format. The checks run in an
+MVC **authorization** filter, before model binding: a refused caller never sees a validation error, and a request body
+is not read before the check. Refusals are thrown as `BaseError`s for the exception middleware (`UseVAppCore`) to render.
+
+The same attributes work on SignalR hubs and hub methods (`VAuthorizeHubFilter`); a refusal reaches the client as a
+`HubException` whose message is the refusal's `messageKey`.
+
+`AddVAppCore` registers all of this. An app that takes only this part calls `AddVAuthorization()` instead — it does not
+install `VResponseFilter`:
+
+```csharp
+builder.Services.AddVAuthorization();
+```
+
+### Scoped authorization
+
+A flat permission list says what a user may do *somewhere*. Multi-tenant APIs need *where*: a user administers one
+project and only reads another, and a caller who is not in a project must not learn that it exists. Name the **scope** a
+permission is held in, and the app's resolver answers for that scope:
+
+```csharp
+[ApiController]
+[Route("api/projects/{projectId:guid}/tasks")]
+public class TaskController(TaskService tasks) : ControllerBase
+{
+    [HttpGet("{taskId:guid}")]
+    [VAuthorize(Scope = "project", Permission = "tasks.view")]
+    public async Task<ActionResult<TaskDto>> Get(Guid projectId, Guid taskId) => Ok(await tasks.GetAsync(projectId, taskId));
+}
+```
+
+**Register the scopes and the entities that belong to them.** A scope is carried by a route value; an entity is any
+other id that must belong to the scope:
+
+```csharp
+builder.Services.AddVAuthorization(o =>
+{
+    o.AddScope("instance");                                              // one instance, no id
+    o.AddScope<Guid>("org", "orgId", new ErrorObject { Message = "Organization not found", MessageKey = "ORG_NOT_FOUND" });
+    o.AddScope<Guid>("project", "projectId", new ErrorObject { Message = "Project not found", MessageKey = "PROJECT_NOT_FOUND" });
+
+    // The locator returns the entity's scope id, or null when there is no such entity.
+    o.AddEntity<Guid>("project", "taskId",
+        async (sp, id, ct) => (await sp.GetRequiredService<AppDbContext>().Tasks
+            .Where(t => t.Id == id).Select(t => (Guid?)t.ProjectId).FirstOrDefaultAsync(ct))?.ToString(),
+        new ErrorObject { Message = "Task not found", MessageKey = "TASK_NOT_FOUND" });
+});
+builder.Services.AddScoped<IScopeAccessResolver, AccessResolver>();
+```
+
+**Implement the resolver** — the one place your permission model lives (membership, inheritance from a parent scope,
+API keys bound to a project):
+
+```csharp
+public class AccessResolver(AppDbContext db) : IScopeAccessResolver
+{
+    public async ValueTask<ScopeAccess> ResolveAsync(ClaimsPrincipal caller, VScope scope, CancellationToken ct)
+    {
+        if (scope.Type != "project" || !Guid.TryParse(scope.Id, out var projectId)
+            || !Guid.TryParse(caller.FindFirstValue(ClaimTypes.NameIdentifier), out var userId))
+            return ScopeAccess.Hidden;
+
+        var keys = await db.ProjectMembers
+            .Where(m => m.ProjectId == projectId && m.UserId == userId)
+            .Select(m => m.Role.Permissions.Select(p => p.Key).ToList())
+            .FirstOrDefaultAsync(ct);
+        return keys is null ? ScopeAccess.Hidden : ScopeAccess.Visible(keys);   // a member with no keys still sees it
+    }
+}
+```
+
+The resolver is asked **at most once per scope per request** (or hub invocation); the answer is never kept longer, so a
+grant or a removal takes effect on the caller's next request.
+
+**What a request gets**, in this order:
+
+1. Not signed in → `401`.
+2. The scope's id: the route value the scope was registered with, or `ScopeFrom`. When `ScopeFrom` names a registered
+   entity, the scope is **located through the entity** (`[VAuthorize(Scope = "project", ScopeFrom = "taskId")]` on
+   `/api/tasks/{taskId}`) — an entity that does not exist → the entity's `404`.
+3. A scope the caller may not see → the scope's `404` — or the **entity's** `404` when the scope was reached through
+   one, so another tenant's task and a task id that was never issued answer exactly alike.
+4. A missing permission → `403` (`permission.required`, `metadata.permission` or `metadata.anyOf`; replace it with
+   `VAuthorizationOptions.Forbidden`).
+5. Every other route value registered as an entity of the scope must belong to it → else the entity's `404`, the same
+   answer an id that was never issued gets. Binding comes after the permission check, so a caller refused for a
+   permission learns nothing about ids. Leave a route value out of binding with `Unbound = new[] { "taskId" }` (and
+   say why beside the declaration) — for example when the action allows a task of another project on purpose.
+
+Ids are compared in the key type's canonical form, so `{projectId}` written in any format the route accepts names the
+same scope. Every property of a scoped declaration that is set applies (`Permission`, `AnyOf`, `ApiKey`, `Role`).
+
+**Give declarations your own vocabulary** by subclassing — the filters read every subclass:
+
+```csharp
+public sealed class ProjectAccessAttribute : VAuthorizeAttribute
+{
+    public ProjectAccessAttribute(string? permission = null) { Scope = "project"; Permission = permission; }
+}
+
+[ProjectAccess("tasks.view")]
+[ProjectAccess("tasks.view", ScopeFrom = "taskId")]   // on a route that carries only the task
+```
+
+**Hub methods** declare the same way; `ScopeFrom` names a parameter:
+
+```csharp
+[VAuthorize]
+public class TasksHub : Hub
+{
+    [VAuthorize(Scope = "project", ScopeFrom = "taskId", Permission = "tasks.view")]
+    public Task Watch(string taskId) => Groups.AddToGroupAsync(Context.ConnectionId, $"task:{taskId}");
+}
+```
+
+**API keys bound to a scope:** `[VAuthorize(Scope = "project", ApiKey = "runs.read")]` needs the API-key scheme and the
+key in the scope — the resolver answers for the key's own project and hides every other one.
+
+### IVAccess — the same answer inside a service
+
+For a rule a declaration cannot express — a permission needed for part of a request only, linked data shown only to
+holders of its own permission, a ceiling on what a caller may grant — inject `IVAccess`. It shares the declarations'
+resolver and per-request memo:
+
+```csharp
+if (request.Relink)
+    await access.RequireAsync(new VScope("project", projectId.ToString()), "requirements.update"); // 404 / 403 as a declaration would
+
+var linked = (await access.GetAsync(new VScope("project", projectId.ToString()))).Has("requirements.view")
+    ? await LoadRequirementsAsync(testCaseId)
+    : [];
+```
+
+`IVAccess` is tied to the request's caller; background work that acts for someone calls its own rule directly.
+
+### VAuthorizationCatalog and VerifyVAuthorization
+
+`VAuthorizationCatalog.Describe(app.Services)` lists every controller action and hub method with its declarations and
+parameters — hold it against your own requirement table in a test. To refuse to start an app whose declarations are
+incomplete, call `VerifyVAuthorization()` after mapping:
+
+```csharp
+app.MapControllers();
+app.MapHub<TasksHub>("/hubs/tasks");
+app.VerifyVAuthorization();   // throws, listing every problem
+```
+
+It refuses: an action or hub method with no `[VAuthorize]` that does not allow anonymous access; `[VAuthorize]` together
+with `[AllowAnonymous]`; an unregistered scope; a `ScopeFrom` that names no route value (or parameter); a route value of a
+scoped endpoint that is neither its scope's id, a registered entity of it, nor `Unbound`; and scoped declarations with no
+`IScopeAccessResolver` registered. Minimal-API endpoints are not listed — the declarations are MVC and hub filters.
 
 ---
 

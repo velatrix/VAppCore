@@ -10,7 +10,7 @@ namespace VAppCore;
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers VAppCore services: ICurrentUser, MVC filters (VAuthorize, VResponse),
+    /// Registers VAppCore services: ICurrentUser, VAuthorize enforcement (AddVAuthorization), the VResponse filter,
     /// VQueryParser model binder, validation factory, and a DbContext alias so that
     /// VServices can inject DbContext directly.
     /// Pair with <c>options.UseVAppCore&lt;...&gt;(sp)</c> on the DbContext registration.
@@ -58,11 +58,13 @@ public static class ServiceCollectionExtensions
         }
         services.TryAddSingleton(sp => new CursorCodec(sp.GetRequiredService<ICursorProtector>()));
 
+        // [VAuthorize] on actions and hub methods (VAuthorizeFilter, VAuthorizeHubFilter) and IVAccess.
+        services.AddVAuthorization();
+
         // MVC filters and validation factory
         services.Configure<MvcOptions>(options =>
         {
             options.ModelBinderProviders.Insert(0, new VQueryParserBinderProvider());
-            options.Filters.Add<VAuthorizeFilter>();
             options.Filters.Add<VResponseFilter>();
         });
 

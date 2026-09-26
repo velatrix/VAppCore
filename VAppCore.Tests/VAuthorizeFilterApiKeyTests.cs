@@ -8,7 +8,7 @@ namespace VAppCore.Tests;
 
 public class VAuthorizeFilterApiKeyTests
 {
-    private static ActionExecutingContext BuildContext(VAuthorizeAttribute attr, ICurrentUser user)
+    private static AuthorizationFilterContext BuildContext(VAuthorizeAttribute attr, ICurrentUser user)
     {
         var http = new DefaultHttpContext();
         var sp = new ServiceCollection().AddSingleton(user).BuildServiceProvider();
@@ -19,11 +19,7 @@ public class VAuthorizeFilterApiKeyTests
             EndpointMetadata = new[] { (object)attr }
         };
         var actionContext = new Microsoft.AspNetCore.Mvc.ActionContext(http, new RouteData(), ad);
-        return new ActionExecutingContext(
-            actionContext,
-            new List<IFilterMetadata>(),
-            new Dictionary<string, object?>(),
-            controller: new object());
+        return new AuthorizationFilterContext(actionContext, new List<IFilterMetadata>());
     }
 
     private sealed class FakeUser : ICurrentUser
@@ -44,8 +40,7 @@ public class VAuthorizeFilterApiKeyTests
         var ctx = BuildContext(attr, user);
         var filter = new VAuthorizeFilter();
 
-        await Assert.ThrowsAsync<UnauthorizedError>(() =>
-            filter.OnActionExecutionAsync(ctx, () => Task.FromResult<ActionExecutedContext>(null!)));
+        await Assert.ThrowsAsync<UnauthorizedError>(() => filter.OnAuthorizationAsync(ctx));
     }
 
     [Fact]
@@ -61,8 +56,7 @@ public class VAuthorizeFilterApiKeyTests
         var ctx = BuildContext(attr, user);
         var filter = new VAuthorizeFilter();
 
-        var ex = await Assert.ThrowsAsync<ForbiddenError>(() =>
-            filter.OnActionExecutionAsync(ctx, () => Task.FromResult<ActionExecutedContext>(null!)));
+        var ex = await Assert.ThrowsAsync<ForbiddenError>(() => filter.OnAuthorizationAsync(ctx));
         Assert.Equal("api_key.required", ex.Context.Error.MessageKey);
     }
 
@@ -79,8 +73,7 @@ public class VAuthorizeFilterApiKeyTests
         var ctx = BuildContext(attr, user);
         var filter = new VAuthorizeFilter();
 
-        var ex = await Assert.ThrowsAsync<ForbiddenError>(() =>
-            filter.OnActionExecutionAsync(ctx, () => Task.FromResult<ActionExecutedContext>(null!)));
+        var ex = await Assert.ThrowsAsync<ForbiddenError>(() => filter.OnAuthorizationAsync(ctx));
         Assert.Equal("permission.required", ex.Context.Error.MessageKey);
     }
 
@@ -97,8 +90,7 @@ public class VAuthorizeFilterApiKeyTests
         var ctx = BuildContext(attr, user);
         var filter = new VAuthorizeFilter();
 
-        var nextCalled = false;
-        await filter.OnActionExecutionAsync(ctx, () => { nextCalled = true; return Task.FromResult<ActionExecutedContext>(null!); });
-        Assert.True(nextCalled);
+        await filter.OnAuthorizationAsync(ctx);
+        Assert.Null(ctx.Result);
     }
 }
