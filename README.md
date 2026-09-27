@@ -1651,7 +1651,12 @@ public Task<IActionResult> CreateLobby(CreateLobbyDto dto) { ... }   // 5x weigh
 public Task<IActionResult> ListProducts() { ... }
 ```
 
-Endpoints without `[VRateLimit]` are not rate-limited.
+Endpoints without `[VRateLimit]` are not rate-limited. The middleware reads the matched endpoint's metadata, so a
+minimal API takes the same attribute:
+
+```csharp
+app.MapPost("/auth/login", Login).WithMetadata(new VRateLimitAttribute(VAppCoreRateLimitPolicies.Auth));
+```
 
 ### Default policies
 
@@ -1666,14 +1671,18 @@ Override any of them or add new ones via `o.Policies["my-policy"] = new RateLimi
 ### Per-user partitioning
 
 The default `IRateLimitPartitioner`:
-- If the request is authenticated, partitions on `user-{userId}` — limits enforced per user
-- Else partitions on `ip-{remoteIp}` — limits enforced per anonymous IP
+- If `ICurrentUser` is registered (`AddVAppCore` registers it) and says the request is authenticated, partitions on
+  `user-{name}` — the principal's name, else its first claim — limits enforced per user
+- Else partitions on `ip-{remoteIp}` — limits enforced per client address
+
+Behind a reverse proxy or an ingress, `RemoteIpAddress` is the proxy's unless `app.UseForwardedHeaders(...)` runs first
+with the proxy's networks as `KnownProxies`/`KnownNetworks` — without it, every anonymous client shares one bucket.
 
 Override by registering your own `IRateLimitPartitioner` (per-tenant, per-API-key, etc).
 
 ### Per-tier multipliers
 
-`TierMultipliers` keyed by role name. Each request, the user's roles are checked; the highest multiplier matched is applied to the policy's capacity AND refill rate. Example: with `["paid"] = 10`, a "paid" user on the `mutation` policy effectively gets 600/min (60 × 10) instead of 60/min. `double.MaxValue` means no limit.
+`TierMultipliers` keyed by role name. Each request, the user's roles are checked; the highest multiplier matched is applied to the policy's capacity AND refill rate. Example: with `["paid"] = 10`, a "paid" user on the `vmutation` policy (`VAppCoreRateLimitPolicies.Mutation`) effectively gets 600/min (60 × 10) instead of 60/min. `double.MaxValue` means no limit.
 
 ### Rejection response
 
@@ -1729,16 +1738,29 @@ public class LobbyController(RateLimitChecker rl, LobbyService lobbies) : Contro
     [HttpGet("can-create")]
     public async Task<IActionResult> CanCreateLobby()
     {
-        var check = await rl.CheckAsync("mutation", cost: 5);
+        var check = await rl.CheckAsync(VAppCoreRateLimitPolicies.Mutation, cost: 5);
         return Ok(new { canCreate = check.Permitted, retryAfter = check.RetryAfter });
     }
 
-    [HttpPost, VRateLimit("mutation", Cost = 5)]
+    [HttpPost, VRateLimit(VAppCoreRateLimitPolicies.Mutation, Cost = 5)]
     public Task<IActionResult> CreateLobby(...) { ... }   // actual rate limit enforced here
 }
 ```
 
 `CheckAsync` is non-mutating (advisory). `ConsumeAsync` actually decrements — use that when you want to gate work programmatically without an attribute.
+
+### The in-memory store
+
+The default `MemoryRateLimitStore` keeps a token bucket per policy and partition, in process. A bucket that has refilled
+to capacity is no different from a new one, so it is evicted: at most once per `MemoryStoreSweepInterval` (default a
+minute), the first request after the interval sweeps them out. Memory follows the recent request rate — a stream of new
+partitions (client addresses, emails) does not grow it without bound — and a bucket that still holds a deficit is never
+forgotten. Refill is measured on the monotonic clock of the registered `TimeProvider` (else the system's), so a
+wall-clock change neither grants nor takes tokens.
+
+```csharp
+services.AddVAppCoreRateLimiting(o => o.MemoryStoreSweepInterval = TimeSpan.FromMinutes(5));
+```
 
 ### Distributed (Redis) — opt-in
 
@@ -1756,9 +1778,9 @@ The Redis store uses an atomic Lua script for the token-bucket decrement (single
 The `Cost` property on `[VRateLimit]` decrements N tokens per request instead of 1. Useful when one policy's bucket covers multiple endpoint types with different "weights":
 
 ```csharp
-[VRateLimit("mutation")]                 public Task PostScore(...);    // costs 1
-[VRateLimit("mutation", Cost = 5)]       public Task CreateLobby(...);  // costs 5
-[VRateLimit("mutation", Cost = 10)]      public Task UploadAvatar(...); // costs 10
+[VRateLimit(VAppCoreRateLimitPolicies.Mutation)]                 public Task PostScore(...);    // costs 1
+[VRateLimit(VAppCoreRateLimitPolicies.Mutation, Cost = 5)]       public Task CreateLobby(...);  // costs 5
+[VRateLimit(VAppCoreRateLimitPolicies.Mutation, Cost = 10)]      public Task UploadAvatar(...); // costs 10
 ```
 
 A user with capacity=60 gets 60 PostScore-equivalents, or 12 CreateLobbies, or 6 avatar uploads — they share the same bucket.

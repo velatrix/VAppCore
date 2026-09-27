@@ -12,10 +12,12 @@ public class RedisRateLimitingRegistrationTests
         services.AddLogging();
         services.AddVAppCoreRateLimiting();
 
-        // Before Redis registration: in-memory store is registered
+        // Before Redis registration: in-memory store is registered (by a factory, since 3.1.0 — it takes the
+        // options' sweep interval and a registered TimeProvider)
         var before = services.Where(s => s.ServiceType == typeof(IRateLimitStore)).ToList();
         Assert.Single(before);
-        Assert.Equal(typeof(MemoryRateLimitStore), before[0].ImplementationType);
+        using (var provider = services.BuildServiceProvider())
+            Assert.IsType<MemoryRateLimitStore>(provider.GetRequiredService<IRateLimitStore>());
 
         // Pretend to register Redis (we use a connection string that's never actually connected
         // because we won't build the provider — just verify the descriptor swap)
@@ -23,9 +25,8 @@ public class RedisRateLimitingRegistrationTests
 
         var after = services.Where(s => s.ServiceType == typeof(IRateLimitStore)).ToList();
         Assert.Single(after);
-        // Memory store is gone
-        Assert.NotEqual(typeof(MemoryRateLimitStore), after[0].ImplementationType);
-        // Replaced with a factory-registered RedisRateLimitStore
+        // Memory store is gone, replaced with a factory-registered RedisRateLimitStore
+        Assert.DoesNotContain(before[0], after);
         Assert.NotNull(after[0].ImplementationFactory);
     }
 }

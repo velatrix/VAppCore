@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.1.0 — 2026-09-27
+
+### Added
+
+- **The in-memory rate-limit store forgets what it no longer needs.** `MemoryRateLimitStore` evicts the buckets that
+  have refilled to capacity — no different from new ones — at most once per
+  `VAppCoreRateLimitingOptions.MemoryStoreSweepInterval` (default a minute), on the first request after it passes;
+  `EvictFullBuckets()` does it on demand and `Count` says how many buckets are held. A stream of new partition keys
+  (client addresses, emails) no longer grows the store without bound. A bucket that still holds a deficit is kept, and a
+  caller holding a bucket the sweep has just evicted takes a fresh one, so no token is granted twice.
+- `MemoryRateLimitStore(TimeProvider, TimeSpan)`. `AddVAppCoreRateLimiting` passes a registered `TimeProvider` and the
+  sweep interval, which must be positive.
+
+### Changed
+
+- The in-memory store measures refill on the monotonic clock (`TimeProvider.GetTimestamp`): a wall-clock step no
+  longer grants or takes tokens.
+- `AddVAppCoreRateLimiting` registers the in-memory store by a factory (it was by type). Code that read the
+  descriptor's `ImplementationType` resolves the service instead; `AddVAppCoreRateLimitingRedis` replaces it as before.
+
+### Documentation
+
+- README: the in-memory store; a minimal API takes `[VRateLimit]` through `WithMetadata`; the default partitioner keys
+  by user only when `ICurrentUser` is registered, and needs forwarded headers behind a proxy; the examples name
+  `VAppCoreRateLimitPolicies.Mutation` (`vmutation`) where they said `"mutation"`, a policy that is not registered.
+
 ## 3.0.0 — 2026-09-26
 
 ### Added

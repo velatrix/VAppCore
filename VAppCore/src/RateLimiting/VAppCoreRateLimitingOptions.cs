@@ -23,4 +23,14 @@ public class VAppCoreRateLimitingOptions
 
     /// <summary>If true, registers <see cref="LoggingRateLimitObserver"/> automatically.</summary>
     public bool LogRejections { get; set; } = false;
+
+    /// <summary>The default <see cref="MemoryStoreSweepInterval"/>: a minute.</summary>
+    public static readonly TimeSpan DefaultMemoryStoreSweepInterval = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// How often, at most, <see cref="MemoryRateLimitStore"/> evicts the buckets that have refilled to capacity — no
+    /// different from new ones — on the first request after the interval passes. Longer keeps more idle buckets in
+    /// memory; shorter sweeps more often. Must be positive. The Redis store expires its keys on its own.
+    /// </summary>
+    public TimeSpan MemoryStoreSweepInterval { get; set; } = DefaultMemoryStoreSweepInterval;
 }

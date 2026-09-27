@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 
 namespace VAppCore;
 
@@ -9,8 +10,9 @@ public static class RateLimitingServiceCollectionExtensions
     /// <summary>
     /// Registers VAppCore's rate-limiting services: in-memory store, default partitioner,
     /// the three default policies (vauth/vmutation/vread), and observers.
-    /// Replace the store via <c>services.AddSingleton&lt;IRateLimitStore, RedisRateLimitStore&gt;()</c>
+    /// Replace the store via <c>services.AddVAppCoreRateLimitingRedis(...)</c>
     /// (from the <c>VAppCore.RateLimiting.Redis</c> sub-package) for distributed deployments.
+    /// The in-memory store reads the clock from a registered <see cref="TimeProvider"/> when there is one.
     /// </summary>
     public static IServiceCollection AddVAppCoreRateLimiting(
         this IServiceCollection services,
@@ -18,6 +20,9 @@ public static class RateLimitingServiceCollectionExtensions
     {
         var opts = new VAppCoreRateLimitingOptions();
         configure?.Invoke(opts);
+        if (opts.MemoryStoreSweepInterval <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(configure), opts.MemoryStoreSweepInterval,
+                "MemoryStoreSweepInterval must be positive.");
 
         services.Configure<VAppCoreRateLimitingOptions>(o =>
         {
@@ -26,9 +31,12 @@ public static class RateLimitingServiceCollectionExtensions
             o.TierMultipliers.Clear();
             foreach (var (k, v) in opts.TierMultipliers) o.TierMultipliers[k] = v;
             o.LogRejections = opts.LogRejections;
+            o.MemoryStoreSweepInterval = opts.MemoryStoreSweepInterval;
         });
 
-        services.TryAddSingleton<IRateLimitStore, MemoryRateLimitStore>();
+        services.TryAddSingleton<IRateLimitStore>(sp => new MemoryRateLimitStore(
+            sp.GetService<TimeProvider>() ?? TimeProvider.System,
+            sp.GetRequiredService<IOptions<VAppCoreRateLimitingOptions>>().Value.MemoryStoreSweepInterval));
         services.TryAddSingleton<IRateLimitPartitioner, DefaultRateLimitPartitioner>();
         services.TryAddScoped<RateLimitChecker>();
 
