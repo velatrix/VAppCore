@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.1.1 — 2026-09-28
+
+### Fixed
+
+- **`=isnull=` and `=isnotnull=` take `true` alone.** Neither operator reads its value, so `deletedAt=isnull=false`
+  meant "is null" — the opposite of what it says — and a caller that wrote it was answered inverted, in silence (a
+  consumer's "Disabled" filter listed the active accounts). Any value but `true` (in any case) is now refused with an
+  `RsqlParseException` that names the operator that says it: `deletedAt=isnotnull=true`. A filter that wrote `true`
+  answers as before.
+
 ## 3.1.0 — 2026-09-27
 
 ### Added

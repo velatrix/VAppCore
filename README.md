@@ -734,6 +734,10 @@ VQueryParser reads `filter`, `sort`, `select`, `cursor` / `before`, `page`, and 
 | Is null | `=isnull=` | `deletedAt=isnull=true` |
 | Is not null | `=isnotnull=` | `email=isnotnull=true` |
 
+`=isnull=` and `=isnotnull=` take `true` alone: neither reads a value, so `=isnull=false` would mean "is null" — the
+opposite of what it says. Any other value is refused (`RsqlParseException`, naming the operator that says it): for
+"is not null", write `=isnotnull=true`.
+
 ### Logical Operators
 
 - **AND**: `;` — `name==John;age=gt=25`

@@ -524,11 +524,23 @@ public class VRsqlParser
         var selectorToken = Expect(TokenType.Identifier, "Expected selector");
         var operatorToken = Expect(TokenType.Operator, "Expected operator");
         var args = ParseArguments();
+        var op = RsqlTokenizer.GetOperator(operatorToken.Value);
+
+        // =isnull= and =isnotnull= read no value, so one saying the opposite (=isnull=false) would be answered inverted,
+        // in silence. Each takes `true` alone; the opposite is the other operator.
+        if (op is RsqlOperator.IsNull or RsqlOperator.IsNotNull
+            && !(args.Count == 1 && string.Equals(args[0], "true", StringComparison.OrdinalIgnoreCase)))
+        {
+            var opposite = op == RsqlOperator.IsNull ? "=isnotnull=" : "=isnull=";
+            throw new RsqlParseException(
+                $"'{operatorToken.Value}' takes 'true' alone, not '{string.Join(",", args)}': for the opposite, " +
+                $"use '{selectorToken.Value}{opposite}true'");
+        }
 
         return new ComparisonNode
         {
             Selector = selectorToken.Value,
-            Operator = RsqlTokenizer.GetOperator(operatorToken.Value),
+            Operator = op,
             Arguments = args
         };
     }

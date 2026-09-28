@@ -95,6 +95,28 @@ public class VRsqlParserTests
         Assert.Equal(RsqlOperator.IsNotNull, comparison.Operator);
     }
 
+    [Theory]
+    [InlineData("department=isnull=TRUE")]
+    [InlineData("department=isnotnull=True")]
+    public void Parse_NullOperators_TakeTrueInAnyCase(string rsql)
+    {
+        Assert.IsType<ComparisonNode>(_parser.Parse(rsql));
+    }
+
+    // Neither operator reads its value, so "=isnull=false" meant "is null" — the opposite of what it says. Refused now,
+    // naming the operator that says it.
+    [Theory]
+    [InlineData("department=isnull=false", "department=isnotnull=true")]
+    [InlineData("department=isnotnull=false", "department=isnull=true")]
+    [InlineData("department=isnull=yes", "department=isnotnull=true")]
+    [InlineData("department=isnull=(true,false)", "department=isnotnull=true")]
+    public void Parse_NullOperators_RefuseAnyValueButTrue(string rsql, string instead)
+    {
+        var ex = Assert.Throws<RsqlParseException>(() => _parser.Parse(rsql));
+
+        Assert.Contains($"use '{instead}'", ex.Message);
+    }
+
     [Fact]
     public void Parse_QuotedString_ParsesCorrectly()
     {
